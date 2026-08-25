@@ -1,0 +1,141 @@
+name: Build and publish extension repository
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: extension-repository
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Scan tracked files
+        run: python .github/scripts/security-scan.py
+
+      - name: Set up Java
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+
+      - name: Prepare signing key
+        env:
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+        run: |
+          test -n "$SIGNING_KEY" || { echo "Missing SIGNING_KEY repository secret"; exit 1; }
+          printf '%s' "$SIGNING_KEY" | base64 --decode > signingkey.jks
+
+      - name: Build and lint E-Hentai
+        env:
+          ALIAS: eextensions
+          KEY_STORE_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+        run: |
+          test -n "$KEY_STORE_PASSWORD" || { echo "Missing SIGNING_PASSWORD repository secret"; exit 1; }
+          ./gradlew :src:en:ehentai:assembleRelease :src:en:ehentai:lintRelease --no-daemon
+
+      - name: Prepare repository files
+        shell: bash
+        run: |
+          INFO=src/en/ehentai/build/keiyoushi-source-info.json
+          APK=$(find src/en/ehentai/build/outputs/apk/release -name '*.apk' -print -quit)
+          JAR=$(find src/en/ehentai/build/outputs/jar/release -name '*.jar' -print -quit)
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner -print | sort -V | tail -1)
+          VERSION=$(python -c 'import json; print(json.load(open("src/en/ehentai/build/keiyoushi-source-info.json"))["versionName"])')
+          CERT=$($APKSIGNER verify --print-certs "$APK" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')
+          TAG="v$VERSION"
+          RELEASE_BASE="https://github.com/${GITHUB_REPOSITORY}/releases/download/$TAG"
+          ICON_URL="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/src/en/ehentai/res/mipmap-xhdpi/ic_launcher.png"
+          python .github/scripts/build-index.py \
+            --source-info "$INFO" \
+            --apk "$APK" \
+            --jar "$JAR" \
+            --signing-key "$CERT" \
+            --apk-base-url "$RELEASE_BASE" \
+            --jar-base-url "$RELEASE_BASE" \
+            --icon-url "$ICON_URL" \
+            --output repo-output
+          mkdir release-bundle
+          cp "$APK" "$JAR" release-bundle/
+          cp -R repo-output release-bundle/repo-output
+          printf '%s\n' "$TAG" > release-bundle/tag.txt
+          (cd release-bundle && find . -type f ! -name sha256sums.txt -print0 | sort -z | xargs -0 sha256sum > sha256sums.txt)
+
+      - name: Upload verified release bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: extension-release
+          path: release-bundle
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Remove signing key
+        if: always()
+        run: rm -f signingkey.jks
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Check out repository for publishing
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Download release bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: extension-release
+          path: release-bundle
+
+      - name: Verify release bundle
+        run: (cd release-bundle && sha256sum -c sha256sums.txt)
+
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=$(cat release-bundle/tag.txt)
+          APK=$(find release-bundle -maxdepth 1 -name '*.apk' -print -quit)
+          JAR=$(find release-bundle -maxdepth 1 -name '*.jar' -print -quit)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK" "$JAR" --clobber
+          else
+            gh release create "$TAG" "$APK" "$JAR" --title "E-Hentai $TAG" --notes "Automated extension release from $GITHUB_SHA"
+          fi
+
+      - name: Publish repo branch
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          if git ls-remote --exit-code --heads origin repo >/dev/null 2>&1; then
+            git fetch origin repo:repo
+            git switch repo
+            git rm -rf .
+          else
+            git switch --orphan repo
+            git rm -rf . || true
+          fi
+          cp -R release-bundle/repo-output/. .
+          git add index.json index.min.json checksums.json apk jar
+          git commit -m "Publish E-Hentai $(cat release-bundle/tag.txt)"
+          git push origin HEAD:repo

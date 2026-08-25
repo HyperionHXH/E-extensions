@@ -1,0 +1,17 @@
+.gradle/
+.kotlin/
+build/
+**/build/
+local.properties
+*.iml
+.idea/
+signingkey.jks
+/*.apk
+/*.jar
+/upstream/
+/src/*/*/
+!/src/en/ehentai/
+!/src/pt/superhentais/
+/lib/*/
+!/lib/unpacker/
+/lib-multisrc/
