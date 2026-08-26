@@ -12,6 +12,7 @@ signingkey.jks
 /src/*/*/
 !/src/en/ehentai/
 !/src/pt/superhentais/
+!/src/all/pixez/
 /lib/*/
 !/lib/unpacker/
 /lib-multisrc/

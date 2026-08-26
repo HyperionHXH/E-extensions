@@ -35,6 +35,7 @@ rootProject.name = "E-extensions"
  */
 loadIndividualExtension("en", "ehentai")
 loadIndividualExtension("pt", "superhentais")
+loadIndividualExtension("all", "pixez")
 
 /**
  * ===================================== COMMON CONFIGURATION ======================================
