@@ -11,6 +11,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.addCookie
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.getPreferencesLazy
@@ -48,11 +49,13 @@ abstract class Ehentai :
     override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder {
         val refreshClient = network.client.newBuilder()
             .cookieJar(sessionCookieJar)
+            .addLoginCookies()
             .configureProxy()
             .protocols(listOf(Protocol.HTTP_1_1))
             .build()
 
         return cookieJar(sessionCookieJar)
+            .addLoginCookies()
             .configureProxy()
             .protocols(listOf(Protocol.HTTP_1_1))
             .retryOnConnectionFailure(true)
@@ -60,6 +63,11 @@ abstract class Ehentai :
             .readTimeout(90, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
             .addInterceptor(EhentaiInterceptor(prefs, refreshClient))
+    }
+
+    private fun OkHttpClient.Builder.addLoginCookies(): OkHttpClient.Builder = apply {
+        addCookie({ Constants.DOMAIN_EHENTAI }) { prefs.loginCookies }
+        addCookie({ Constants.DOMAIN_EXHENTAI }) { prefs.loginCookies }
     }
 
     private fun OkHttpClient.Builder.configureProxy(): OkHttpClient.Builder = apply {
@@ -431,20 +439,20 @@ abstract class Ehentai :
 }
 
 private class EhentaiCookieJar : CookieJar {
-    private val cookies = ConcurrentHashMap<String, List<Cookie>>()
+    private val storedCookies = ConcurrentHashMap<String, List<Cookie>>()
 
-    override fun saveFromResponse(url: HttpUrl, newCookies: List<Cookie>) {
-        if (newCookies.isEmpty()) return
-        val existing = cookies[url.host].orEmpty()
-        val merged = (existing + newCookies)
+    override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
+        if (cookies.isEmpty()) return
+        val existing = storedCookies[url.host].orEmpty()
+        val merged = (existing + cookies)
             .filter { it.expiresAt > System.currentTimeMillis() }
             .associateBy { it.name + "\u0000" + it.domain + "\u0000" + it.path }
             .values
             .toList()
-        cookies[url.host] = merged
+        storedCookies[url.host] = merged
     }
 
-    override fun loadForRequest(url: HttpUrl): List<Cookie> = cookies.values
+    override fun loadForRequest(url: HttpUrl): List<Cookie> = storedCookies.values
         .asSequence()
         .flatten()
         .filter { it.matches(url) && it.expiresAt > System.currentTimeMillis() }

@@ -8,10 +8,10 @@ import okhttp3.OkHttpClient
 import okhttp3.Response
 import org.jsoup.Jsoup
 import java.io.IOException
+import javax.net.ssl.SSLHandshakeException
 
 /**
- * Adds the configured browser User-Agent to every request, and the login
- * cookie only to e-hentai.org / exhentai.org (and their subdomains).
+ * Adds the configured browser User-Agent to every request.
  *
  * Referer headers are set at request-construction time (page requests use
  * `baseUrl/`, image requests use the viewer page URL) because the two kinds
@@ -25,6 +25,7 @@ class EhentaiInterceptor(
     companion object {
         /** Internal request context used to refresh a failed H@H image URL. */
         const val VIEWER_URL_HEADER = "X-Ehentai-Viewer-Url"
+        private const val MAX_IMAGE_RETRIES = 3
         private val RELOAD_KEY_REGEX = Regex("""return\s+nl\(['\"]([^'\"]+)['\"]\)""")
     }
 
@@ -34,20 +35,6 @@ class EhentaiInterceptor(
 
         builder.header("User-Agent", prefs.userAgent)
 
-        val host = request.url.host
-        if (prefs.isSiteHost(host)) {
-            val cookie = prefs.cookie
-            if (cookie.isNotEmpty()) {
-                val existing = request.header("Cookie")
-                builder.header(
-                    "Cookie",
-                    listOf(existing, cookie)
-                        .filter { !it.isNullOrBlank() }
-                        .joinToString("; "),
-                )
-            }
-        }
-
         var requestWithHeaders = builder.build()
         val retryableImageHost = isImageHost(requestWithHeaders.url.host)
         val viewerUrl = request.header(VIEWER_URL_HEADER) ?: request.header("Referer")
@@ -55,10 +42,10 @@ class EhentaiInterceptor(
         while (true) {
             try {
                 val response = chain.proceed(requestWithHeaders)
-                if (retryableImageHost && attempt < 2 && isRetryableImageStatus(response.code)) {
+                if (retryableImageHost && attempt < MAX_IMAGE_RETRIES && isRetryableImageStatus(response.code)) {
                     response.close()
                     attempt++
-                    refreshImageUrl(viewerUrl)?.let { refreshedUrl ->
+                    refreshImageUrl(viewerUrl, preferOriginal = attempt == MAX_IMAGE_RETRIES)?.let { refreshedUrl ->
                         requestWithHeaders = requestWithHeaders.newBuilder()
                             .url(refreshedUrl)
                             .removeHeader(VIEWER_URL_HEADER)
@@ -70,9 +57,10 @@ class EhentaiInterceptor(
                 }
                 return response
             } catch (e: IOException) {
-                if (!retryableImageHost || attempt >= 2) throw e
+                if (!retryableImageHost || attempt >= MAX_IMAGE_RETRIES) throw e
                 attempt++
-                refreshImageUrl(viewerUrl)?.let { refreshedUrl ->
+                val preferOriginal = e.isTlsHandshakeFailure() || attempt == MAX_IMAGE_RETRIES
+                refreshImageUrl(viewerUrl, preferOriginal)?.let { refreshedUrl ->
                     requestWithHeaders = requestWithHeaders.newBuilder()
                         .url(refreshedUrl)
                         .removeHeader(VIEWER_URL_HEADER)
@@ -94,7 +82,7 @@ class EhentaiInterceptor(
      * E-Hentai exposes the JavaScript `nl(key)` reload endpoint for exactly this
      * case; fetch it without the extension interceptor, then retry the image.
      */
-    private fun refreshImageUrl(viewerUrl: String?): String? {
+    private fun refreshImageUrl(viewerUrl: String?, preferOriginal: Boolean): String? {
         val client = fallbackClient ?: return null
         if (viewerUrl.isNullOrBlank()) return null
         return try {
@@ -108,6 +96,10 @@ class EhentaiInterceptor(
             val viewerHtml = client.newCall(GET(viewerUrl, headers)).execute().use { response ->
                 if (!response.isSuccessful) return null
                 response.body.string()
+            }
+            val viewerDocument = Jsoup.parse(viewerHtml, viewerUrl)
+            if (preferOriginal) {
+                return runCatching { parseImageUrl(viewerDocument, wantOriginal = true) }.getOrNull()
             }
             val reloadKey = RELOAD_KEY_REGEX.find(viewerHtml)?.groupValues?.get(1) ?: return null
             val reloadUrl = viewerUrl.toHttpUrl().newBuilder()
@@ -123,4 +115,6 @@ class EhentaiInterceptor(
             null
         }
     }
+
+    private fun IOException.isTlsHandshakeFailure(): Boolean = generateSequence<Throwable>(this) { it.cause }.any { it is SSLHandshakeException }
 }

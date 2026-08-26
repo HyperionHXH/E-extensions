@@ -43,16 +43,19 @@ class EhentaiPreferences(
      * Users commonly paste the value together with a trailing full-width
      * punctuation mark or a `Cookie:` prefix. OkHttp rejects non-ASCII header
      * characters, so parse only the three login fields and discard malformed
-     * values before the interceptor constructs the request header.
+     * values before the network layer injects them into requests.
      */
-    val cookie: String
+    val loginCookies: List<Pair<String, String>>
         get() = listOf(
             PREF_MEMBER_ID,
             PREF_PASS_HASH,
             PREF_IGNEOUS,
         ).mapNotNull { name ->
-            cookieValue(name)?.let { "$name=$it" }
-        }.joinToString("; ")
+            cookieValue(name)?.let { name to it }
+        }
+
+    val cookie: String
+        get() = loginCookies.joinToString("; ") { (name, value) -> "$name=$value" }
 
     val hasLoginCookie: Boolean
         get() = listOf(PREF_MEMBER_ID, PREF_PASS_HASH, PREF_IGNEOUS).all { cookieValue(it) != null }
