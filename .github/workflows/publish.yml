@@ -13,7 +13,6 @@ on:
       - build.gradle.kts
       - gradle/**
       - settings.gradle.kts
-      - src/all/pixez/**
       - src/en/ehentai/**
 
 permissions: {}
@@ -32,10 +31,6 @@ jobs:
             title: E-Hentai
             module: :src:en:ehentai
             source-dir: src/en/ehentai
-          - slug: pixez
-            title: PixEz
-            module: :src:all:pixez
-            source-dir: src/all/pixez
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
