@@ -139,5 +139,5 @@ jobs:
           fi
           cp -R release-bundle/repo-output/. .
           git add index.json index.min.json checksums.json apk jar
-          git commit -m "Publish E-Hentai $(cat release-bundle/tag.txt)"
+          git diff --cached --quiet || git commit -m "Publish E-Hentai $(cat release-bundle/tag.txt)"
           git push origin HEAD:repo
