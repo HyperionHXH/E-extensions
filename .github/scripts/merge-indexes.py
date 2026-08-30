@@ -15,7 +15,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    repo_dirs = sorted(args.bundles.glob("*/repo-output"))
+    repo_dirs = sorted(args.bundles.glob("**/repo-output"))
     if not repo_dirs:
         raise ValueError("No repository outputs were found")
 
