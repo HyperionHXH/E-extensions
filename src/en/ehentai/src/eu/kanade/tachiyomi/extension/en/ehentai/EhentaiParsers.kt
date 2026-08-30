@@ -4,6 +4,7 @@ import eu.kanade.tachiyomi.extension.en.ehentai.Constants.GALLERY_COVER
 import eu.kanade.tachiyomi.extension.en.ehentai.Constants.GALLERY_DESCRIPTION
 import eu.kanade.tachiyomi.extension.en.ehentai.Constants.GALLERY_META_ROWS
 import eu.kanade.tachiyomi.extension.en.ehentai.Constants.GALLERY_PAGE_COUNT_TEXT
+import eu.kanade.tachiyomi.extension.en.ehentai.Constants.GALLERY_PAGE_LINKS
 import eu.kanade.tachiyomi.extension.en.ehentai.Constants.GALLERY_TAG_NAMESPACE
 import eu.kanade.tachiyomi.extension.en.ehentai.Constants.GALLERY_TAG_ROWS
 import eu.kanade.tachiyomi.extension.en.ehentai.Constants.GALLERY_TITLE_EN
@@ -195,11 +196,17 @@ fun parseUploader(doc: Document): String? = doc.selectFirst(GALLERY_UPLOADER)?.t
 
 /** All tags as `namespace:tag` joined with ", " (without the namespace column headers). */
 fun parseTags(doc: Document): String? {
-    val parts = doc.select(GALLERY_TAG_ROWS).mapNotNull { row ->
-        val namespace = row.selectFirst(GALLERY_TAG_NAMESPACE)?.text()?.trimEnd(':') ?: return@mapNotNull null
-        val tag = row.select("td:eq(1) a").firstOrNull()?.text() ?: return@mapNotNull null
-        "$namespace:$tag"
-    }
+    val parts = doc.select(GALLERY_TAG_ROWS).flatMap { row ->
+        val namespace = row.selectFirst(GALLERY_TAG_NAMESPACE)?.text()?.trimEnd(':')
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: return@flatMap emptyList()
+        row.select("td").getOrNull(1)?.select("a")
+            .orEmpty()
+            .mapNotNull { anchor ->
+                anchor.text().trim().takeIf { it.isNotEmpty() }?.let { "$namespace:$it" }
+            }
+    }.distinct()
     return parts.joinToString(", ").ifEmpty { null }
 }
 
@@ -236,8 +243,18 @@ fun parsePageCount(doc: Document): Int {
 private val PAGE_COUNT_REGEX = Regex("""(\d+)\s+pages""")
 private val SHOWING_REGEX = Regex("""of\s+(\d+)\s+images""")
 
+/** Number of thumbnail pages exposed by the gallery navigation (`?p=N`). */
+fun parseThumbnailPageCount(doc: Document): Int = doc.select(GALLERY_PAGE_LINKS)
+    .mapNotNull { link ->
+        Regex("[?&]p=(\\d+)").find(link.attr("href"))?.groupValues?.get(1)?.toIntOrNull()
+    }
+    .maxOrNull()
+    ?.plus(1)
+    ?: 1
+
 /** Viewer page URLs of one thumbnail page (`#gdt a[href*=/s/]`), absolute. */
-fun parseViewerLinks(doc: Document): List<String> = doc.select(GALLERY_VIEWER_LINKS).map { it.absUrl("href") }
+fun parseViewerLinks(doc: Document): List<String> = doc.select(GALLERY_VIEWER_LINKS)
+    .mapNotNull { it.absUrl("href").takeIf(String::isNotBlank) }
 
 // ---------------------------------------------------------------------------
 // Viewer page (single image)
@@ -251,10 +268,13 @@ fun parseViewerLinks(doc: Document): List<String> = doc.select(GALLERY_VIEWER_LI
  */
 fun parseImageUrl(doc: Document, wantOriginal: Boolean): String {
     if (wantOriginal) {
-        doc.selectFirst(VIEWER_ORIGINAL_LINK)?.let { return it.absUrl("href") }
+        doc.selectFirst(VIEWER_ORIGINAL_LINK)?.absUrl("href")
+            ?.takeIf(String::isNotBlank)
+            ?.let { return it }
     }
-    return doc.selectFirst(VIEWER_IMAGE)?.attr("src")
-        ?: throw Exception("Could not find an image in the viewer page")
+    return doc.selectFirst(VIEWER_IMAGE)?.absUrl("src")
+        ?.takeIf(String::isNotBlank)
+        ?: throw Exception("Could not find a non-empty image URL in the viewer page")
 }
 
 // ---------------------------------------------------------------------------

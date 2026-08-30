@@ -92,7 +92,8 @@ object Constants {
     const val GALLERY_TAG_ROWS = "#taglist table tr"
     const val GALLERY_TAG_NAMESPACE = "td.tc"
     const val GALLERY_DESCRIPTION = "#gd2"
-    const val GALLERY_VIEWER_LINKS = "#gdt a[href*=/s/]"
+    const val GALLERY_VIEWER_LINKS = "#gdt a[href*='/s/]"
+    const val GALLERY_PAGE_LINKS = "table.ptt a[href]"
     const val GALLERY_PAGE_COUNT_TEXT = "p.gpc"
 
     const val VIEWER_IMAGE = "img#img"

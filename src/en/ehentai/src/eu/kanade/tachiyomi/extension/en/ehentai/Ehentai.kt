@@ -62,7 +62,11 @@ abstract class Ehentai :
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(90, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
-            .addInterceptor(EhentaiInterceptor(prefs, refreshClient))
+            .addInterceptor(
+                EhentaiInterceptor(prefs, refreshClient) { viewerUrl, imageUrl ->
+                    imageUrlCache[viewerUrl] = imageUrl
+                },
+            )
     }
 
     private fun OkHttpClient.Builder.addLoginCookies(): OkHttpClient.Builder = apply {
@@ -261,24 +265,45 @@ abstract class Ehentai :
     }
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val galleryUrl = "$baseUrl${chapter.url}".withNoWarningUrl()
+        val galleryUrl = "$baseUrl${chapter.url}".toHttpUrl()
         val viewerUrls = ArrayList<String>()
         var thumbnailPage = 0
-        var pageCount = -1
+        var expectedThumbnailPages: Int? = null
 
-        while (true) {
-            val url = galleryUrl.toHttpUrl().newBuilder().apply {
-                if (thumbnailPage > 0) addQueryParameter("p", thumbnailPage.toString())
+        while (thumbnailPage < (expectedThumbnailPages ?: Constants.MAX_THUMB_PAGES) &&
+            thumbnailPage < Constants.MAX_THUMB_PAGES
+        ) {
+            val url = galleryUrl.newBuilder().apply {
+                if (thumbnailPage == 0) {
+                    addQueryParameter("nw", "always")
+                } else {
+                    addQueryParameter("p", thumbnailPage.toString())
+                }
             }.build().toString()
             val html = fetchPageHtmlWithRetry(url)
             val document = Jsoup.parse(html, url)
-            if (thumbnailPage == 0) pageCount = parsePageCount(document)
-            val links = parseViewerLinks(document).filter { it !in viewerUrls }
-            viewerUrls.addAll(links)
+            if (thumbnailPage == 0) {
+                val pageCount = parsePageCount(document)
+                expectedThumbnailPages = when {
+                    pageCount > 0 -> (pageCount + Constants.THUMBNAILS_PER_PAGE - 1) /
+                        Constants.THUMBNAILS_PER_PAGE
+                    else -> parseThumbnailPageCount(document)
+                }
+            }
+            val links = parseViewerLinks(document)
+            val newLinks = links.filter { it !in viewerUrls }
+            val expectedPages = expectedThumbnailPages
+            if (expectedPages != null && thumbnailPage + 1 < expectedPages &&
+                (links.isEmpty() || newLinks.isEmpty())
+            ) {
+                throw Exception(
+                    "Gallery pagination returned no new thumbnails for page ${thumbnailPage + 1}; " +
+                        "the site may be rate-limiting this request. Please retry after a short wait.",
+                )
+            }
+            viewerUrls.addAll(newLinks)
             thumbnailPage++
-
-            if (pageCount > 0 && viewerUrls.size >= pageCount) break
-            if (links.isEmpty() || thumbnailPage > Constants.MAX_THUMB_PAGES) break
+            if (links.isEmpty()) break
         }
 
         return buildList {

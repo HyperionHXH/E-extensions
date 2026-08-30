@@ -20,6 +20,7 @@ import javax.net.ssl.SSLHandshakeException
 class EhentaiInterceptor(
     private val prefs: EhentaiPreferences,
     private val fallbackClient: OkHttpClient? = null,
+    private val onImageUrlRefreshed: ((viewerUrl: String, imageUrl: String) -> Unit)? = null,
 ) : Interceptor {
 
     companion object {
@@ -46,6 +47,7 @@ class EhentaiInterceptor(
                     response.close()
                     attempt++
                     refreshImageUrl(viewerUrl, preferOriginal = attempt == MAX_IMAGE_RETRIES)?.let { refreshedUrl ->
+                        viewerUrl?.let { onImageUrlRefreshed?.invoke(it, refreshedUrl) }
                         requestWithHeaders = requestWithHeaders.newBuilder()
                             .url(refreshedUrl)
                             .removeHeader(VIEWER_URL_HEADER)
@@ -61,6 +63,7 @@ class EhentaiInterceptor(
                 attempt++
                 val preferOriginal = e.isTlsHandshakeFailure() || attempt == MAX_IMAGE_RETRIES
                 refreshImageUrl(viewerUrl, preferOriginal)?.let { refreshedUrl ->
+                    viewerUrl?.let { onImageUrlRefreshed?.invoke(it, refreshedUrl) }
                     requestWithHeaders = requestWithHeaders.newBuilder()
                         .url(refreshedUrl)
                         .removeHeader(VIEWER_URL_HEADER)
