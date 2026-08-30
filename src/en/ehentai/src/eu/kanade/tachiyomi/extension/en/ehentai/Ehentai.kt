@@ -98,6 +98,7 @@ abstract class Ehentai :
     private val imageUrlCache = ConcurrentHashMap<String, String>()
     private val lastPageRequestAt = AtomicLong(0L)
     private val sessionPrimedHosts = ConcurrentHashMap.newKeySet<String>()
+    private val accountTagSets = ConcurrentHashMap<String, AccountTagSet>()
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         checkExhentaiAccess()
@@ -135,12 +136,18 @@ abstract class Ehentai :
 
     private suspend fun getWatchedManga(page: Int, query: String, filters: FilterList): MangasPage {
         checkWatchedAccess()
+        primeSession(baseUrl)
 
         val languageIsActive = filters.filterIsInstance<LanguageFilter>().firstOrNull()?.state?.let { it > 0 } == true
         val reservedTerms = (if (query.isBlank()) 0 else 1) + (if (languageIsActive) 1 else 0)
         val chunkSize = (MAX_INCLUDED_TERMS - reservedTerms).coerceAtLeast(1)
-        val watchedTags = prefs.watchedIncludeTags.mapNotNull(::exactTagTerm).distinct()
-        val hiddenTags = prefs.watchedExcludeTags.mapNotNull(::canonicalTag).distinct()
+        val accountTags = accountTagSets[baseUrl.toHttpUrl().host]?.tags.orEmpty()
+        val watchedTags = (accountTags.filter { it.watched && !it.hidden }.map { it.name } + prefs.watchedIncludeTags)
+            .mapNotNull(::exactTagTerm)
+            .distinct()
+        val hiddenTags = (accountTags.filter { it.hidden }.map { it.name } + prefs.watchedExcludeTags)
+            .mapNotNull(::canonicalTag)
+            .distinct()
         val excludedTerms = hiddenTags
             .mapNotNull(::exactTagTerm)
             .distinct()
@@ -188,6 +195,7 @@ abstract class Ehentai :
             client.get(sessionUrl.toString(), headers, CacheControl.FORCE_NETWORK).use { response ->
                 val html = response.body.string()
                 rejectLoginPage(response.request.url.toString(), html)
+                accountTagSets[host] = parseAccountTagSet(Jsoup.parse(html, sessionUrl.toString()))
             }
         } catch (error: Exception) {
             sessionPrimedHosts.remove(host)
