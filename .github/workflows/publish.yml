@@ -130,8 +130,12 @@ jobs:
       - name: Verify release bundles
         shell: bash
         run: |
-          for bundle in release-bundles/extension-release-*; do
-            (cd "$bundle" && sha256sum -c sha256sums.txt)
+          mapfile -t CHECKSUM_FILES < <(find release-bundles -type f -name sha256sums.txt -print)
+          test "${#CHECKSUM_FILES[@]}" -gt 0 || { echo "No release bundle checksums found"; exit 1; }
+          for checksum in "${CHECKSUM_FILES[@]}"; do
+            bundle=$(dirname "$checksum")
+            echo "Verifying $bundle"
+            (cd "$bundle" && sha256sum --strict --check sha256sums.txt)
           done
 
       - name: Publish release assets
@@ -139,7 +143,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          for bundle in release-bundles/extension-release-*; do
+          mapfile -t BUNDLES < <(find release-bundles -type f -name tag.txt -print0 | xargs -0 -r -n1 dirname)
+          test "${#BUNDLES[@]}" -gt 0 || { echo "No release bundles found"; exit 1; }
+          for bundle in "${BUNDLES[@]}"; do
             TAG=$(cat "$bundle/tag.txt")
             TITLE=$(cat "$bundle/title.txt")
             APK=$(find "$bundle" -maxdepth 1 -name '*.apk' -print -quit)
