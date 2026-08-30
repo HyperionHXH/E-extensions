@@ -23,6 +23,7 @@ import okhttp3.CookieJar
 import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Request
@@ -102,7 +103,7 @@ abstract class Ehentai :
         checkExhentaiAccess()
         val url = "$baseUrl/popular"
         val html = fetchPageHtmlWithRetry(url)
-        val mangas = parseMangaList(Jsoup.parse(html, url)).onEach { it.setUrlWithoutDomain(it.url) }
+        val mangas = parseMangaList(Jsoup.parse(html, url)).onEach { it.url = relativeUrl(it.url) }
         return MangasPage(mangas, false)
     }
 
@@ -220,7 +221,7 @@ abstract class Ehentai :
         if (url.contains("/favorites.php")) {
             prefs.saveFavoriteCategoryNames(parseFavoriteCategoryNames(document))
         }
-        val mangas = parseMangaList(document).onEach { it.setUrlWithoutDomain(it.url) }
+        val mangas = parseMangaList(document).onEach { it.url = relativeUrl(it.url) }
         return MangasPage(mangas, nextUrl != null)
     }
 
@@ -236,7 +237,7 @@ abstract class Ehentai :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         if (!prefs.isSiteHost(url.host) || url.pathSegments.firstOrNull() != "g") return null
-        val manga = SManga.create().apply { setUrlWithoutDomain(url.toString()) }
+        val manga = SManga.create().apply { this.url = relativeUrl(url.toString()) }
         return fetchMangaUpdate(manga, emptyList(), fetchDetails = true, fetchChapters = false)
             .manga
             .apply { initialized = true }
@@ -249,10 +250,10 @@ abstract class Ehentai :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         checkExhentaiAccess()
-        val url = "$baseUrl${manga.url}".withNoWarningUrl()
+        val url = absoluteUrl(manga.url).withNoWarningUrl()
         val html = fetchPageHtmlWithRetry(url)
         val document = Jsoup.parse(html, url)
-        val cleanUrl = manga.url.substringBefore('?')
+        val cleanUrl = relativeUrl(manga.url).substringBefore('?')
         val updatedManga = parseGalleryDetails(document, SManga.create().apply { this.url = cleanUrl })
         val chapter = SChapter.create().apply {
             name = "Full Gallery"
@@ -265,7 +266,7 @@ abstract class Ehentai :
     }
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val galleryUrl = "$baseUrl${chapter.url}".toHttpUrl()
+        val galleryUrl = absoluteUrl(chapter.url).toHttpUrl()
         val viewerUrls = ArrayList<String>()
         var thumbnailPage = 0
         var expectedThumbnailPages: Int? = null
@@ -336,9 +337,9 @@ abstract class Ehentai :
 
     override fun getHomeUrl(): String = baseUrl
 
-    override fun getMangaUrl(manga: SManga): String = "$baseUrl${manga.url}"
+    override fun getMangaUrl(manga: SManga): String = absoluteUrl(manga.url)
 
-    override fun getChapterUrl(chapter: SChapter): String = "$baseUrl${chapter.url}"
+    override fun getChapterUrl(chapter: SChapter): String = absoluteUrl(chapter.url)
 
     override fun getFilterList(data: JsonElement?): FilterList = ehentaiFilterList(prefs.favoriteCategoryNames)
 
@@ -404,6 +405,21 @@ abstract class Ehentai :
         return Headers.Builder()
             .add("Referer", "${parsed.scheme}://${parsed.host}/")
             .build()
+    }
+
+    private fun absoluteUrl(value: String): String {
+        val parsed = value.toHttpUrlOrNull()
+        return parsed?.toString() ?: baseUrl.toHttpUrl().resolve(value)?.toString()
+            ?: throw Exception("Invalid gallery URL: $value")
+    }
+
+    private fun relativeUrl(value: String): String {
+        val parsed = value.toHttpUrlOrNull() ?: return value
+        return buildString {
+            append(parsed.encodedPath)
+            parsed.encodedQuery?.let { append('?').append(it) }
+            parsed.encodedFragment?.let { append('#').append(it) }
+        }
     }
 
     private fun String.withNoWarningUrl(): String = toHttpUrl()
