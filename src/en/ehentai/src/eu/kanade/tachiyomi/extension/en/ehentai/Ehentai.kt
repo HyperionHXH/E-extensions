@@ -153,7 +153,7 @@ abstract class Ehentai :
                 add(buildSearchParams(baseUrl, accountQuery, filters).build().toString())
             }
             watchedTags.chunked(chunkSize).forEach { chunk ->
-                val watchedTerms = (chunk.map { "~$it" } + excludedTerms).joinToString(" ")
+                val watchedTerms = (chunk + excludedTerms).joinToString(" ")
                 add(buildSearchParams(baseUrl, query, filters, watchedTerms).build().toString())
             }
         }
