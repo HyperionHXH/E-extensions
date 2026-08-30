@@ -408,18 +408,25 @@ abstract class Ehentai :
     }
 
     private fun absoluteUrl(value: String): String {
-        val parsed = value.toHttpUrlOrNull()
-        return parsed?.toString() ?: baseUrl.toHttpUrl().resolve(value)?.toString()
+        val normalized = normalizeUrl(value)
+        val parsed = normalized.toHttpUrlOrNull()
+        return parsed?.toString() ?: baseUrl.toHttpUrl().resolve(normalized)?.toString()
             ?: throw Exception("Invalid gallery URL: $value")
     }
 
     private fun relativeUrl(value: String): String {
-        val parsed = value.toHttpUrlOrNull() ?: return value
+        val parsed = normalizeUrl(value).toHttpUrlOrNull() ?: return value
         return buildString {
             append(parsed.encodedPath)
             parsed.encodedQuery?.let { append('?').append(it) }
             parsed.encodedFragment?.let { append('#').append(it) }
         }
+    }
+
+    private fun normalizeUrl(value: String): String = when {
+        value.startsWith("https//", ignoreCase = true) -> "https://${value.substring(7)}"
+        value.startsWith("http//", ignoreCase = true) -> "http://${value.substring(6)}"
+        else -> value
     }
 
     private fun String.withNoWarningUrl(): String = toHttpUrl()
