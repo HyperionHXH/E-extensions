@@ -181,7 +181,7 @@ fun parseGalleryDetails(doc: Document, manga: SManga): SManga {
  */
 fun parseGalleryCover(doc: Document): String? {
     doc.selectFirst("$GALLERY_COVER img[src]")?.absUrl("src")?.takeIf { it.isNotBlank() }?.let { return it }
-    val style = doc.selectFirst("$GALLERY_COVER div[style*=url]")?.attr("style") ?: return null
+    val style = doc.selectFirst("$GALLERY_COVER div[style*='url']")?.attr("style") ?: return null
     return COVER_URL_REGEX.find(style)?.groupValues?.get(1)
 }
 

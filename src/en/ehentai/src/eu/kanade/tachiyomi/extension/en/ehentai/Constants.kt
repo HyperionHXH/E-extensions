@@ -77,10 +77,10 @@ object Constants {
     // HTML selectors (centralized so a site redesign only touches this file)
     // ------------------------------------------------------------------
     const val LIST_ROW_SELECTOR = "table.itg tr:has(td.gl3c)"
-    const val LIST_GALLERY_LINK_SELECTOR = "a[href*=/g/]"
+    const val LIST_GALLERY_LINK_SELECTOR = "a[href*='/g/']"
     const val LIST_COVER_SELECTOR = "td.gl2c img"
-    const val LIST_TITLE_SELECTOR = "a[href*=/g/] div.glink"
-    const val LIST_LINK_SELECTOR = "a[href*=/g/]"
+    const val LIST_TITLE_SELECTOR = "a[href*='/g/'] div.glink"
+    const val LIST_LINK_SELECTOR = "a[href*='/g/']"
     const val LIST_TAGS_SELECTOR = "div.gt"
     const val LIST_POSTED_SELECTOR = "div[id^=posted_]:not([id^=postedpop_])"
 
@@ -88,14 +88,14 @@ object Constants {
     const val GALLERY_TITLE_JP = "#gj"
     const val GALLERY_COVER = "#gd1"
     const val GALLERY_META_ROWS = "#gdd table tr"
-    const val GALLERY_UPLOADER = "#gdn a[href*=/uploader/]"
+    const val GALLERY_UPLOADER = "#gdn a[href*='/uploader/']"
     const val GALLERY_TAG_ROWS = "#taglist table tr"
     const val GALLERY_TAG_NAMESPACE = "td.tc"
     const val GALLERY_DESCRIPTION = "#gd2"
-    const val GALLERY_VIEWER_LINKS = "#gdt a[href*=/s/]"
+    const val GALLERY_VIEWER_LINKS = "#gdt a[href*='/s/']"
     const val GALLERY_PAGE_LINKS = "table.ptt a[href]"
     const val GALLERY_PAGE_COUNT_TEXT = "p.gpc"
 
     const val VIEWER_IMAGE = "img#img"
-    const val VIEWER_ORIGINAL_LINK = "a[href*=/fullimg/]"
+    const val VIEWER_ORIGINAL_LINK = "a[href*='/fullimg/']"
 }
