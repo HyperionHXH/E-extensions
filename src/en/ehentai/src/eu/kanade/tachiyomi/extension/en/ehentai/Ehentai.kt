@@ -144,16 +144,33 @@ abstract class Ehentai :
 
         if (prefs.hasLoginCookie) {
             val rootUrl = buildSearchParams(baseUrl, "", filters).build().toString()
-            val result = fetchSearchPage(rootUrl, page) ?: return MangasPage(emptyList(), false)
             val includedTags = prefs.watchedIncludeTags
                 .mapNotNull(::canonicalTag)
                 .distinct()
-            val filtered = result.mangas.filter { manga ->
-                val tags = mangaTags(manga)
-                (includedTags.isEmpty() || tags.any { it in includedTags }) &&
-                    tags.none { it in hiddenTags }
+
+            // /watched is the same server-ordered feed used by JHenTai. A
+            // filtered first page can otherwise contain fewer entries than a
+            // normal source page (or be empty), so consume its next cursors
+            // until this page is full. The order is never rebuilt locally.
+            val filtered = ArrayList<SManga>(WATCHED_PAGE_SIZE)
+            val pageSeen = HashSet<String>()
+            var requestPage = page
+            var hasNextPage = true
+            while (hasNextPage && filtered.size < WATCHED_PAGE_SIZE) {
+                val result = fetchSearchPage(rootUrl, requestPage) ?: break
+                requestPage = 2
+                result.mangas.forEach { manga ->
+                    if (!pageSeen.add(manga.url)) return@forEach
+                    val tags = mangaTags(manga)
+                    if ((includedTags.isEmpty() || tags.any { it in includedTags }) &&
+                        tags.none { it in hiddenTags }
+                    ) {
+                        filtered += manga
+                    }
+                }
+                hasNextPage = result.hasNextPage
             }
-            return MangasPage(filtered, result.hasNextPage)
+            return MangasPage(filtered, hasNextPage)
         }
 
         val excludedTerms = hiddenTags
@@ -471,6 +488,7 @@ abstract class Ehentai :
         .orEmpty()
 
     companion object {
+        private const val WATCHED_PAGE_SIZE = 25
         private const val MAX_INCLUDED_TERMS = 5
         private const val MAX_EXCLUDED_TERMS = 10
     }
