@@ -4,6 +4,7 @@ import android.content.SharedPreferences
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.ConfigurableSource
+import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
@@ -41,7 +42,9 @@ abstract class Ehentai :
     KeiSource(),
     ConfigurableSource {
 
-    override val supportsLatest = false
+    // The site's front page is the same newest-first gallery feed exposed by
+    // JHenTai's Gallery page, so Mihon can offer it as Latest as well.
+    override val supportsLatest = true
 
     private val preferences: SharedPreferences by getPreferencesLazy()
     private val prefs by lazy { EhentaiPreferences(preferences) }
@@ -100,13 +103,13 @@ abstract class Ehentai :
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         checkExhentaiAccess()
-        val url = "$baseUrl/popular"
-        val html = fetchPageHtmlWithRetry(url)
-        val mangas = parseMangaList(Jsoup.parse(html, url)).onEach { it.url = relativeUrl(it.url) }
-        return MangasPage(mangas, false)
+        return fetchSearchPage("$baseUrl/popular", page) ?: MangasPage(emptyList(), false)
     }
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = throw UnsupportedOperationException("Not used")
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
+        checkExhentaiAccess()
+        return fetchSearchPage(baseUrl, page) ?: MangasPage(emptyList(), false)
+    }
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         checkExhentaiAccess()
@@ -138,13 +141,15 @@ abstract class Ehentai :
         // newest to oldest and its `next` cursor advances that same feed. Do not
         // turn watched tags into independent searches: that loses the global
         // ordering and brings old galleries back into the first page.
-        val hiddenTags = prefs.watchedExcludeTags
+        val hiddenTags = watchedTagFilterValues(filters, WatchedExcludeFilter::class.java, prefs.watchedExcludeTags)
             .mapNotNull(::canonicalTag)
             .distinct()
 
         if (prefs.hasLoginCookie) {
-            val rootUrl = buildSearchParams(baseUrl, "", filters).build().toString()
-            val includedTags = prefs.watchedIncludeTags
+            // JHenTai keeps the watched endpoint's server ordering while still
+            // applying the active keyword/category/date constraints.
+            val rootUrl = buildSearchParams(baseUrl, query, filters).build().toString()
+            val includedTags = watchedTagFilterValues(filters, WatchedIncludeFilter::class.java, prefs.watchedIncludeTags)
                 .mapNotNull(::canonicalTag)
                 .distinct()
 
@@ -181,7 +186,9 @@ abstract class Ehentai :
         val languageIsActive = filters.filterIsInstance<LanguageFilter>().firstOrNull()?.state?.let { it > 0 } == true
         val reservedTerms = (if (query.isBlank()) 0 else 1) + (if (languageIsActive) 1 else 0)
         val chunkSize = (MAX_INCLUDED_TERMS - reservedTerms).coerceAtLeast(1)
-        val watchedTags = prefs.watchedIncludeTags.mapNotNull(::exactTagTerm).distinct()
+        val watchedTags = watchedTagFilterValues(filters, WatchedIncludeFilter::class.java, prefs.watchedIncludeTags)
+            .mapNotNull(::exactTagTerm)
+            .distinct()
 
         val rootUrls = watchedTags.chunked(chunkSize).map { chunk ->
             val watchedTerms = (chunk + excludedTerms).joinToString(" ")
@@ -223,7 +230,9 @@ abstract class Ehentai :
                 document = Jsoup.parse(html, pageUrl)
             }
         }
-        val nextUrl = parseNextUrl(html)
+        val nextUrl = parseNextUrl(html)?.let { next ->
+            pageUrl.toHttpUrl().resolve(next)?.toString() ?: next
+        }
         if (nextUrl == null) nextPageCursors.remove(rootUrl) else nextPageCursors[rootUrl] = nextUrl
 
         if (url.contains("/favorites.php")) {
@@ -486,6 +495,18 @@ abstract class Ehentai :
         ?.mapNotNull(::canonicalTag)
         ?.toSet()
         .orEmpty()
+
+    private fun watchedTagFilterValues(
+        filters: FilterList,
+        type: Class<out Filter.Text>,
+        fallback: List<String>,
+    ): List<String> {
+        val value = filters.firstOrNull { type.isInstance(it) }
+            ?.let { (it as Filter.Text).state }
+            ?.trim()
+            .orEmpty()
+        return if (value.isBlank()) fallback else value.split(',', '\n', '\r').map { it.trim() }.filter { it.isNotEmpty() }
+    }
 
     companion object {
         private const val WATCHED_PAGE_SIZE = 25

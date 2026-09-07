@@ -23,10 +23,13 @@ Every push and pull request runs a tracked-file credential scan. Signing materia
 ## E-Hentai features
 
 - Normal search and account favorites.
-- **My watched tags** uses the selected mirror's authoritative `/watched` feed, matching JHenTai's weight, hidden-tag, and tag-alias behavior.
-- Optional local include/exclude tags supplement the account rules.
+- **My watched tags** uses the selected mirror's authoritative `/watched` feed, the same endpoint used by JHenTai. The server applies the account's watched/hidden-tag rules and ordering; optional local include/exclude fields further narrow that feed without re-sorting it.
+- **JHenTai-style browsing controls** are available in the Mihon filter panel: watched-feed keyword/date constraints, favorite saved/publication ordering, category/rating/language switches, and server-side filter bypasses. The date field uses `YYYY-MM-DD` and is sent as the site's `seek` cursor.
+- Mihon now exposes the E-Hentai front page as **Latest** and the site's `/popular` feed as **Popular**; both retain the server's pagination cursor instead of sorting gallery IDs locally.
 - Category, rating, language, page-count, expunged, and torrent filters.
 - Gallery/page retries, request pacing, and optional image URL pre-resolution.
+
+Mihon/Suwayomi/Komikku provide the reader UI, read history, progress, and download queue. An extension can provide gallery metadata, chapters, pages, filters, and image requests, but cannot replace those host-level screens or read their local history.
 
 The account favorites list is read from ExHentai so it remains available when E-Hentai's favorites endpoint returns a login redirect; gallery details/pages still use the selected mirror. If a mirror returns a temporary rate-limit page, the extension reports it instead of silently showing an empty result.
 

@@ -58,6 +58,12 @@ class BrowseModeFilter :
         arrayOf("普通搜索", "我的收藏夹", "我的关注标签"),
     )
 
+/** Optional per-request watched-tag whitelist. Multiple tags use OR semantics. */
+class WatchedIncludeFilter : Filter.Text("关注标签 (Watched tags, any)")
+
+/** Optional per-request watched-tag blacklist. Matching galleries are omitted. */
+class WatchedExcludeFilter : Filter.Text("排除关注标签 (Hidden tags)")
+
 /** E-Hentai has ten favorite categories, indexed from 0 to 9. */
 class FavoriteCategoryFilter(
     labels: Array<String> = Array(10) { index -> "收藏夹 ${index + 1}" },
@@ -68,6 +74,22 @@ class FavoriteCategoryFilter(
 
 /** Optional E-Hentai query evaluated inside the selected favorite category. */
 class FavoriteKeywordFilter : Filter.Text("收藏夹内标签/关键词 (Favorite tag / keyword)")
+
+/** JHenTai's favorites page can be ordered by gallery publication or save time. */
+class FavoriteSortFilter :
+    Filter.Select<String>(
+        "收藏排序 (Favorite order)",
+        arrayOf("收藏时间 (Saved)", "发布日期 (Published)"),
+    )
+
+/** Optional server-side date cursor, matching JHenTai's date jump. */
+class SeekDateFilter : Filter.Text("跳转日期 (YYYY-MM-DD)")
+
+class DisableLanguageFilter : Filter.CheckBox("忽略语言标签筛选 (Ignore language tags)")
+
+class DisableUploaderFilter : Filter.CheckBox("忽略上传者筛选 (Ignore uploader)")
+
+class DisableTagsFilter : Filter.CheckBox("忽略标签筛选 (Ignore tags)")
 
 /**
  * Category bits in the same order as [CategoryFilter] options (index 0 = All).
@@ -107,8 +129,12 @@ private val LANGUAGE_KEYWORDS = arrayOf(
 fun ehentaiFilterList(favoriteCategoryNames: Array<String> = Array(10) { index -> "收藏夹 ${index + 1}" }): FilterList = FilterList(
     Filter.Header("浏览 (Browse)"),
     BrowseModeFilter(),
+    WatchedIncludeFilter(),
+    WatchedExcludeFilter(),
     FavoriteCategoryFilter(favoriteCategoryNames),
     FavoriteKeywordFilter(),
+    FavoriteSortFilter(),
+    SeekDateFilter(),
     Filter.Header("分类 (Category)"),
     CategoryFilter(),
     Filter.Header("搜索选项 (Search options)"),
@@ -120,6 +146,9 @@ fun ehentaiFilterList(favoriteCategoryNames: Array<String> = Array(10) { index -
     Filter.Header("高级 (Advanced)"),
     ExpungedFilter(),
     TorrentFilter(),
+    DisableLanguageFilter(),
+    DisableUploaderFilter(),
+    DisableTagsFilter(),
 )
 
 /**
@@ -155,7 +184,9 @@ fun buildSearchParams(
 
     filters.forEach { filter ->
         when (filter) {
-            is BrowseModeFilter, is FavoriteCategoryFilter -> Unit
+            is BrowseModeFilter, is WatchedIncludeFilter, is WatchedExcludeFilter, is FavoriteCategoryFilter,
+            is FavoriteSortFilter,
+            -> Unit
             is FavoriteKeywordFilter -> {
                 if (browseMode == 1 && favoriteKeyword.isNotBlank()) {
                     search = listOf(search, favoriteKeyword).filter { it.isNotBlank() }.joinToString(" ")
@@ -201,8 +232,18 @@ fun buildSearchParams(
                     builder.addQueryParameter("f_sto", "on")
                 }
             }
+            is DisableLanguageFilter -> if (filter.state) builder.addQueryParameter("f_sfl", "on")
+            is DisableUploaderFilter -> if (filter.state) builder.addQueryParameter("f_sfu", "on")
+            is DisableTagsFilter -> if (filter.state) builder.addQueryParameter("f_sft", "on")
+            is SeekDateFilter -> filter.state.trim().takeIf { it.matches(Regex("\\d{4}-\\d{2}-\\d{2}")) }
+                ?.let { builder.addQueryParameter("seek", it) }
             else -> {}
         }
+    }
+
+    if (browseMode == 1) {
+        val order = filters.filterIsInstance<FavoriteSortFilter>().firstOrNull()?.state ?: 0
+        builder.addQueryParameter("inline_set", if (order == 1) "fs_p" else "fs_f")
     }
 
     if (browseMode == 2 && watchedTerms != null) {
@@ -221,8 +262,11 @@ fun FilterList.hasNoActiveFilters(): Boolean = all { filter ->
     val browseMode = filterIsInstance<BrowseModeFilter>().firstOrNull()?.state ?: 0
     when (filter) {
         is BrowseModeFilter -> filter.state == 0
+        is WatchedIncludeFilter, is WatchedExcludeFilter -> filter.state.isBlank()
         is FavoriteCategoryFilter -> browseMode != 1 || filter.state == 0
         is FavoriteKeywordFilter -> browseMode != 1 || filter.state.isBlank()
+        is FavoriteSortFilter -> browseMode != 1 || filter.state == 0
+        is SeekDateFilter -> filter.state.isBlank()
         is CategoryFilter -> filter.state == 0
         is RatingFilter -> filter.state == 0
         is LanguageFilter -> filter.state == 0
@@ -230,6 +274,7 @@ fun FilterList.hasNoActiveFilters(): Boolean = all { filter ->
         is PagesToFilter -> filter.state.isBlank()
         is ExpungedFilter -> !filter.state
         is TorrentFilter -> !filter.state
+        is DisableLanguageFilter, is DisableUploaderFilter, is DisableTagsFilter -> !filter.state
         else -> true
     }
 }
