@@ -80,7 +80,7 @@ class EhentaiPreferences(
     val proxyUrl: String
         get() = preferences.getString(PREF_PROXY_URL, "").orEmpty().trim()
 
-    /** Optional local terms merged with the account's server-generated watched feed. */
+    /** Optional local terms used to narrow the account's server-generated watched feed. */
     val watchedIncludeTags: List<String>
         get() = parseTagList(preferences.getString(PREF_WATCHED_INCLUDE_TAGS, "").orEmpty())
 
@@ -142,16 +142,16 @@ class EhentaiPreferences(
 
         EditTextPreference(context).apply {
             key = PREF_WATCHED_INCLUDE_TAGS
-            title = "未登录关注标签 (Offline watched tags)"
-            summary = "仅在未填写登录 Cookie 时使用。已登录账号严格使用网站 /watched 最新关注流，不会混入这里的全站搜索结果。"
+            title = "喜欢的关注标签 (Included watched tags)"
+            summary = "登录后在网站 /watched 最新流中筛选；未登录时作为兼容模式的搜索标签。多个标签用逗号分隔。"
             dialogTitle = "未登录关注标签"
             setDefaultValue("")
         }.let { screen.addPreference(it) }
 
         EditTextPreference(context).apply {
             key = PREF_WATCHED_EXCLUDE_TAGS
-            title = "本地补充排除标签 (Extra hidden tags)"
-            summary = "可选。账号 Hidden 标签由网站自动过滤；这里只补充额外排除标签，最多 10 个。"
+            title = "不喜欢的排除标签 (Excluded watched tags)"
+            summary = "登录后在 /watched 最新流中本地排除；账号 Hidden 标签仍由网站自动过滤。多个标签用逗号分隔。"
             dialogTitle = "本地补充排除标签"
             setDefaultValue("")
         }.let { screen.addPreference(it) }

@@ -134,21 +134,33 @@ abstract class Ehentai :
 
     private suspend fun getWatchedManga(page: Int, query: String, filters: FilterList): MangasPage {
         checkWatchedAccess()
+        // JHenTai's watched page is a server-owned feed. It is already ordered
+        // newest to oldest and its `next` cursor advances that same feed. Do not
+        // turn watched tags into independent searches: that loses the global
+        // ordering and brings old galleries back into the first page.
         val hiddenTags = prefs.watchedExcludeTags
             .mapNotNull(::canonicalTag)
             .distinct()
+
+        if (prefs.hasLoginCookie) {
+            val rootUrl = buildSearchParams(baseUrl, "", filters).build().toString()
+            val result = fetchSearchPage(rootUrl, page) ?: return MangasPage(emptyList(), false)
+            val includedTags = prefs.watchedIncludeTags
+                .mapNotNull(::canonicalTag)
+                .distinct()
+            val filtered = result.mangas.filter { manga ->
+                val tags = mangaTags(manga)
+                (includedTags.isEmpty() || tags.any { it in includedTags }) &&
+                    tags.none { it in hiddenTags }
+            }
+            return MangasPage(filtered, result.hasNextPage)
+        }
+
         val excludedTerms = hiddenTags
             .mapNotNull(::exactTagTerm)
             .distinct()
             .take(MAX_EXCLUDED_TERMS)
             .map { "-$it" }
-
-        if (prefs.hasLoginCookie) {
-            val watchedQuery = (listOf(query) + excludedTerms).filter { it.isNotBlank() }.joinToString(" ")
-            val rootUrl = buildSearchParams(baseUrl, watchedQuery, filters).build().toString()
-            return fetchSearchPage(rootUrl, page) ?: MangasPage(emptyList(), false)
-        }
-
         val languageIsActive = filters.filterIsInstance<LanguageFilter>().firstOrNull()?.state?.let { it > 0 } == true
         val reservedTerms = (if (query.isBlank()) 0 else 1) + (if (languageIsActive) 1 else 0)
         val chunkSize = (MAX_INCLUDED_TERMS - reservedTerms).coerceAtLeast(1)

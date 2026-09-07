@@ -132,7 +132,7 @@ fun ehentaiFilterList(favoriteCategoryNames: Array<String> = Array(10) { index -
  * - `f_srdd` takes 2..5 (0 = omit).
  * - `f_sh`/`f_sto` are `on` checkboxes.
  * - With no [watchedTerms], watched mode uses the site's authoritative `/watched` feed.
- * - [watchedTerms] is only used for optional local watched tags, which are merged separately.
+ * - [watchedTerms] is retained only for the unauthenticated compatibility mode.
  * - The old `f_sname`/`f_stags`/`f_sdesc`/`f_sr`/`f_sfl`/`f_sdd`/`f_si` params are gone.
  */
 fun buildSearchParams(
