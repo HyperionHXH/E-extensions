@@ -142,16 +142,16 @@ class EhentaiPreferences(
 
         EditTextPreference(context).apply {
             key = PREF_WATCHED_INCLUDE_TAGS
-            title = "本地补充关注标签 (Extra watched tags)"
-            summary = "可选。账号 My Tags 会自动读取；这里只补充额外标签，多个标签用逗号或换行分隔。"
-            dialogTitle = "本地补充关注标签"
+            title = "未登录关注标签 (Offline watched tags)"
+            summary = "仅在未填写登录 Cookie 时使用。已登录账号严格使用网站 /watched 最新关注流，不会混入这里的全站搜索结果。"
+            dialogTitle = "未登录关注标签"
             setDefaultValue("")
         }.let { screen.addPreference(it) }
 
         EditTextPreference(context).apply {
             key = PREF_WATCHED_EXCLUDE_TAGS
             title = "本地补充排除标签 (Extra hidden tags)"
-            summary = "可选。账号 My Tags 中的 Hidden 标签已自动过滤；这里只补充额外排除标签，最多 10 个。"
+            summary = "可选。账号 Hidden 标签由网站自动过滤；这里只补充额外排除标签，最多 10 个。"
             dialogTitle = "本地补充排除标签"
             setDefaultValue("")
         }.let { screen.addPreference(it) }

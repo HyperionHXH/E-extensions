@@ -97,8 +97,6 @@ abstract class Ehentai :
     private val watchedSeenUrls = ConcurrentHashMap<String, MutableSet<String>>()
     private val imageUrlCache = ConcurrentHashMap<String, String>()
     private val lastPageRequestAt = AtomicLong(0L)
-    private val sessionPrimedHosts = ConcurrentHashMap.newKeySet<String>()
-    private val accountTagSets = ConcurrentHashMap<String, AccountTagSet>()
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         checkExhentaiAccess()
@@ -136,16 +134,7 @@ abstract class Ehentai :
 
     private suspend fun getWatchedManga(page: Int, query: String, filters: FilterList): MangasPage {
         checkWatchedAccess()
-        primeSession(baseUrl)
-
-        val languageIsActive = filters.filterIsInstance<LanguageFilter>().firstOrNull()?.state?.let { it > 0 } == true
-        val reservedTerms = (if (query.isBlank()) 0 else 1) + (if (languageIsActive) 1 else 0)
-        val chunkSize = (MAX_INCLUDED_TERMS - reservedTerms).coerceAtLeast(1)
-        val accountTags = accountTagSets[baseUrl.toHttpUrl().host]?.tags.orEmpty()
-        val watchedTags = (accountTags.filter { it.watched && !it.hidden }.map { it.name } + prefs.watchedIncludeTags)
-            .mapNotNull(::exactTagTerm)
-            .distinct()
-        val hiddenTags = (accountTags.filter { it.hidden }.map { it.name } + prefs.watchedExcludeTags)
+        val hiddenTags = prefs.watchedExcludeTags
             .mapNotNull(::canonicalTag)
             .distinct()
         val excludedTerms = hiddenTags
@@ -154,15 +143,20 @@ abstract class Ehentai :
             .take(MAX_EXCLUDED_TERMS)
             .map { "-$it" }
 
-        val rootUrls = buildList {
-            if (prefs.hasLoginCookie) {
-                val accountQuery = (listOf(query) + excludedTerms).filter { it.isNotBlank() }.joinToString(" ")
-                add(buildSearchParams(baseUrl, accountQuery, filters).build().toString())
-            }
-            watchedTags.chunked(chunkSize).forEach { chunk ->
-                val watchedTerms = (chunk + excludedTerms).joinToString(" ")
-                add(buildSearchParams(baseUrl, query, filters, watchedTerms).build().toString())
-            }
+        if (prefs.hasLoginCookie) {
+            val watchedQuery = (listOf(query) + excludedTerms).filter { it.isNotBlank() }.joinToString(" ")
+            val rootUrl = buildSearchParams(baseUrl, watchedQuery, filters).build().toString()
+            return fetchSearchPage(rootUrl, page) ?: MangasPage(emptyList(), false)
+        }
+
+        val languageIsActive = filters.filterIsInstance<LanguageFilter>().firstOrNull()?.state?.let { it > 0 } == true
+        val reservedTerms = (if (query.isBlank()) 0 else 1) + (if (languageIsActive) 1 else 0)
+        val chunkSize = (MAX_INCLUDED_TERMS - reservedTerms).coerceAtLeast(1)
+        val watchedTags = prefs.watchedIncludeTags.mapNotNull(::exactTagTerm).distinct()
+
+        val rootUrls = watchedTags.chunked(chunkSize).map { chunk ->
+            val watchedTerms = (chunk + excludedTerms).joinToString(" ")
+            buildSearchParams(baseUrl, query, filters, watchedTerms).build().toString()
         }
         val pages = rootUrls.mapNotNull { fetchSearchPage(it, page) }
         val feedKey = rootUrls.joinToString("|")
@@ -178,29 +172,6 @@ abstract class Ehentai :
             .filter { seenUrls.add(it.url) }
             .sortedByDescending { galleryId(it.url) }
         return MangasPage(mangas, pages.any { it.hasNextPage })
-    }
-
-    private suspend fun primeSession(url: String) {
-        if (!prefs.hasLoginCookie) return
-        val root = url.toHttpUrl().newBuilder().apply {
-            encodedPath("/")
-            query(null)
-            fragment(null)
-        }.build()
-        val host = root.host
-        if (!sessionPrimedHosts.add(host)) return
-        try {
-            val sessionUrl = root.newBuilder().addPathSegment("mytags").addQueryParameter("tagset", "1").build()
-            val headers = Headers.Builder().add("Referer", root.toString()).build()
-            client.get(sessionUrl.toString(), headers, CacheControl.FORCE_NETWORK).use { response ->
-                val html = response.body.string()
-                rejectLoginPage(response.request.url.toString(), html)
-                accountTagSets[host] = parseAccountTagSet(Jsoup.parse(html, sessionUrl.toString()))
-            }
-        } catch (error: Exception) {
-            sessionPrimedHosts.remove(host)
-            throw error
-        }
     }
 
     private suspend fun fetchSearchPage(rootUrl: String, page: Int): MangasPage? {
@@ -355,7 +326,6 @@ abstract class Ehentai :
 
     private suspend fun fetchPageHtml(url: String): String {
         checkExhentaiAccess()
-        if (!url.contains("/mytags")) primeSession(url)
         throttlePageRequest()
         return client.get(url, pageHeaders(url), CacheControl.FORCE_NETWORK).use { response ->
             val finalUrl = response.request.url.toString()
