@@ -11,13 +11,13 @@
         "name": "E-Hentai",
         "packageName": "eu.kanade.tachiyomi.extension.en.ehentai",
         "resources": {
-          "apkUrl": "https://github.com/HyperionHXH/E-extensions/releases/download/ehentai-v1.6.23/tachiyomi-en.ehentai-v1.6.23.apk",
+          "apkUrl": "https://github.com/HyperionHXH/E-extensions/releases/download/ehentai-v1.6.24/tachiyomi-en.ehentai-v1.6.24.apk",
           "iconUrl": "https://raw.githubusercontent.com/HyperionHXH/E-extensions/main/src/en/ehentai/res/mipmap-xhdpi/ic_launcher.png",
-          "jarUrl": "https://github.com/HyperionHXH/E-extensions/releases/download/ehentai-v1.6.23/tachiyomi-en.ehentai-v1.6.23.jar"
+          "jarUrl": "https://github.com/HyperionHXH/E-extensions/releases/download/ehentai-v1.6.24/tachiyomi-en.ehentai-v1.6.24.jar"
         },
         "extensionLib": "1.6",
-        "versionCode": "23",
-        "versionName": "1.6.23",
+        "versionCode": "24",
+        "versionName": "1.6.24",
         "contentWarning": "CONTENT_WARNING_NSFW",
         "sources": [
           {
