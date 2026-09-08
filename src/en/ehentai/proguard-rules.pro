@@ -1,3 +1,0 @@
--dontoptimize
--keepattributes StackMapTable
--target 1.6

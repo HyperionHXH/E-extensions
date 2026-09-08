@@ -102,7 +102,12 @@ class EhentaiInterceptor(
             }
             val viewerDocument = Jsoup.parse(viewerHtml, viewerUrl)
             if (preferOriginal) {
-                return runCatching { parseImageUrl(viewerDocument, wantOriginal = true) }.getOrNull()
+                // A standard viewer has no /fullimg/ link. Keep going to the
+                // nl() reload endpoint instead of returning the same broken
+                // image URL that triggered the retry.
+                runCatching {
+                    viewerDocument.selectFirst(Constants.VIEWER_ORIGINAL_LINK)?.absUrl("href")
+                }.getOrNull()?.takeIf(String::isNotBlank)?.let { return it }
             }
             val reloadKey = RELOAD_KEY_REGEX.find(viewerHtml)?.groupValues?.get(1) ?: return null
             val reloadUrl = viewerUrl.toHttpUrl().newBuilder()
