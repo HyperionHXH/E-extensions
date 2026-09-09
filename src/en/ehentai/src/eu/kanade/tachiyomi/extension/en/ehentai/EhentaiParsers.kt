@@ -182,14 +182,19 @@ fun canonicalTag(raw: String): String? {
 // ---------------------------------------------------------------------------
 
 private val NEXT_URL_REGEX = Regex("""var\s+nexturl\s*=\s*[\"']([^\"']*)[\"']""", RegexOption.IGNORE_CASE)
-private val NEXT_LINK_REGEX = Regex("""<a[^>]*id=[\"']dnext[\"'][^>]*href=[\"']([^\"']+)""", RegexOption.IGNORE_CASE)
 
 /** The absolute URL of the next results page, or null on the last page. */
 fun parseNextUrl(html: String, currentUrl: String? = null): String? = NEXT_URL_REGEX.find(html)?.groupValues?.get(1)
     ?.replace("\\/", "/")
     ?.replace("&amp;", "&")
     ?.takeIf { it.isNotEmpty() }
-    ?: NEXT_LINK_REGEX.find(html)?.groupValues?.get(1)?.replace("&amp;", "&")?.takeIf { it.isNotEmpty() }
+    ?: Jsoup.parse(html, currentUrl.orEmpty())
+        .selectFirst("a#dnext[href]")
+        ?.let { link ->
+            link.absUrl("href").ifBlank { link.attr("href") }
+                .replace("&amp;", "&")
+                .takeIf { it.isNotEmpty() }
+        }
     ?: currentUrl?.let { parseNumberedNextUrl(html, it) }
 
 /**
@@ -225,7 +230,10 @@ fun hasNextPage(html: String): Boolean = !parseNextUrl(html).isNullOrEmpty()
 fun parseGalleryDetails(doc: Document, manga: SManga): SManga {
     val titleEn = doc.selectFirst(GALLERY_TITLE_EN)?.text()
     val titleJp = doc.selectFirst(GALLERY_TITLE_JP)?.text()
-    manga.title = titleEn ?: titleJp ?: runCatching { manga.title }.getOrNull() ?: "Untitled Gallery"
+    manga.title = titleEn?.takeIf { it.isNotBlank() }
+        ?: titleJp?.takeIf { it.isNotBlank() }
+        ?: manga.title.takeIf { it.isNotBlank() }
+        ?: throw IllegalArgumentException("Gallery page did not contain a title")
     manga.thumbnail_url = parseGalleryCover(doc) ?: manga.thumbnail_url
     manga.author = parseUploader(doc)
     manga.genre = parseTags(doc)

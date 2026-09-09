@@ -17,6 +17,8 @@ import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.getPreferencesLazy
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonElement
 import okhttp3.CacheControl
 import okhttp3.Cookie
@@ -100,6 +102,7 @@ abstract class Ehentai :
     private val watchedSeenUrls = ConcurrentHashMap<String, MutableSet<String>>()
     private val imageUrlCache = ConcurrentHashMap<String, String>()
     private val lastPageRequestAt = AtomicLong(0L)
+    private val accountTagSyncMutex = Mutex()
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         checkExhentaiAccess()
@@ -277,9 +280,14 @@ abstract class Ehentai :
      */
     private fun directPageUrl(rootUrl: String, page: Int): String? {
         val root = rootUrl.toHttpUrlOrNull() ?: return null
-        if (root.pathSegments.lastOrNull() != "toplist.php") return null
+        val path = root.pathSegments.lastOrNull() ?: return null
+        val pageParameter = when (path) {
+            "toplist.php" -> "p"
+            "torrents.php" -> "page"
+            else -> return null
+        }
         return root.newBuilder()
-            .setQueryParameter("p", (page - 1).toString())
+            .setQueryParameter(pageParameter, (page - 1).toString())
             .build()
             .toString()
     }
@@ -533,23 +541,27 @@ abstract class Ehentai :
      */
     private suspend fun syncAccountTagsIfNeeded() {
         if (!prefs.hasLoginCookie) return
-        if (System.currentTimeMillis() - prefs.accountTagSyncAt < ACCOUNT_TAG_CACHE_TTL_MS) return
+        accountTagSyncMutex.withLock {
+            // Re-check after waiting: another request may have refreshed the
+            // same account while this request was queued on the mutex.
+            if (System.currentTimeMillis() - prefs.accountTagSyncAt < ACCOUNT_TAG_CACHE_TTL_MS) return@withLock
 
-        val tagUrl = Constants.DEFAULT_BASE_URL.toHttpUrl().newBuilder()
-            .addPathSegment("mytags")
-            .addQueryParameter("tagset", prefs.accountTagSetNumber.toString())
-            .build()
-            .toString()
-        runCatching {
-            val document = Jsoup.parse(fetchPageHtmlWithRetry(tagUrl), tagUrl)
-            parseAccountTagSet(document)
-        }.onSuccess { tagSet ->
-            prefs.saveAccountTagSet(tagSet)
-        }.onFailure { error ->
-            throw Exception(
-                "无法读取 E-Hentai /mytags。请重新获取三个 Cookie，并确保它们来自当前 Clash 节点和同一个浏览器会话。",
-                error,
-            )
+            val tagUrl = Constants.DEFAULT_BASE_URL.toHttpUrl().newBuilder()
+                .addPathSegment("mytags")
+                .addQueryParameter("tagset", prefs.accountTagSetNumber.toString())
+                .build()
+                .toString()
+            runCatching {
+                val document = Jsoup.parse(fetchPageHtmlWithRetry(tagUrl), tagUrl)
+                parseAccountTagSet(document)
+            }.onSuccess { tagSet ->
+                prefs.saveAccountTagSet(tagSet)
+            }.onFailure { error ->
+                throw Exception(
+                    "无法读取 E-Hentai /mytags。请重新获取三个 Cookie，并确保它们来自当前 Clash 节点和同一个浏览器会话。",
+                    error,
+                )
+            }
         }
     }
 
