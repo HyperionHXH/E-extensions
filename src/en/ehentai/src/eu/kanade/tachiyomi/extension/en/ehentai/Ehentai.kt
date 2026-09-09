@@ -131,7 +131,7 @@ abstract class Ehentai :
                 fetchSearchPage(rootUrl, page) ?: MangasPage(emptyList(), false)
             }
             2 -> getWatchedManga(page, query, appliedFilters)
-            in 3..7 -> {
+            in 3..6 -> {
                 val rootUrl = buildSearchParams(baseUrl, query, appliedFilters).build().toString()
                 fetchSearchPage(rootUrl, page) ?: MangasPage(emptyList(), false)
             }
@@ -254,11 +254,7 @@ abstract class Ehentai :
         if (url.contains("/favorites.php")) {
             prefs.saveFavoriteCategoryNames(parseFavoriteCategoryNames(document))
         }
-        val mangas = if (pageUrl.toHttpUrlOrNull()?.pathSegments?.lastOrNull() == "torrents.php") {
-            parseTorrentMangaList(document)
-        } else {
-            parseMangaList(document)
-        }.onEach { it.url = relativeUrl(it.url) }
+        val mangas = parseMangaList(document).onEach { it.url = relativeUrl(it.url) }
         return MangasPage(mangas, nextUrl != null)
     }
 
@@ -283,7 +279,6 @@ abstract class Ehentai :
         val path = root.pathSegments.lastOrNull() ?: return null
         val pageParameter = when (path) {
             "toplist.php" -> "p"
-            "torrents.php" -> "page"
             else -> return null
         }
         return root.newBuilder()

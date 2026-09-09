@@ -24,10 +24,9 @@ Every push and pull request runs a tracked-file credential scan. Signing materia
 
 - Normal search and account favorites.
 - **My watched tags** uses the selected mirror's authoritative `/watched` feed, the same endpoint used by JHenTai. The server applies the account's watched/hidden-tag rules and ordering; if the site returns an empty watched feed despite enabled tags in `/mytags`, the extension automatically falls back to batched watched-tag searches, applies hidden tags, and keeps newest galleries first.
-- **JHenTai-style browsing controls** are available in the Mihon filter panel: watched-feed keyword/date constraints, favorite saved/publication ordering, and four ranklist choices directly in **Browse source** (yesterday/month/year/all-time), plus category/rating/language switches and server-side filter bypasses. The date field uses `YYYY-MM-DD` and is sent as the site's `seek` cursor.
+- **JHenTai-style browsing controls** are available in the Mihon filter panel: site search, watched-feed keyword/date constraints, favorite saved/publication ordering, and four ranklist choices directly in **Browse source** (yesterday/month/year/all-time), plus category/rating/language switches and server-side filter bypasses. The date field uses `YYYY-MM-DD` and is sent as the site's `seek` cursor. The site search query is also applied when a non-search browse source is selected, so it can narrow favorites, watched results, and ranklists.
 - Mihon now exposes the E-Hentai front page as **Latest** and the site's `/popular` feed as **Popular**; both retain the server's pagination cursor instead of sorting gallery IDs locally.
 - Category, rating, language, page-count, expunged, and torrent filters.
-- **Torrent list** browsing uses the site's standalone `/torrents.php` page, with seeded/unseeded status and add-time/size/seeder/leecher/download sorting; torrent rows open the normal gallery detail and full page list.
 - Gallery/page retries, request pacing, and optional image URL pre-resolution.
 
 Mihon/Suwayomi/Komikku provide the reader UI, read history, progress, and download queue. An extension can provide gallery metadata, chapters, pages, filters, and image requests, but cannot replace those host-level screens or read their local history.

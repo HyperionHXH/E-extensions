@@ -51,33 +51,18 @@ class ExpungedFilter : Filter.CheckBox("包含已删除画廊 (Browse expunged)"
 /** Require a gallery torrent -> `f_sto=on`. */
 class TorrentFilter : Filter.CheckBox("要求有种子 (Require torrent)")
 
-/** Status filter used by the site's standalone torrent listing. */
-class TorrentStatusFilter :
-    Filter.Select<String>(
-        "种子状态 (Torrent status)",
-        arrayOf("全部", "有做种", "无做种"),
-    )
-
-/** Sort order used by the site's standalone torrent listing. */
-class TorrentSortFilter :
-    Filter.Select<String>(
-        "种子排序 (Torrent order)",
-        arrayOf("添加时间", "文件大小", "做种数", "连接数", "下载数"),
-    )
-
 /** Switches the list endpoint between the public index and the logged-in favorites page. */
 class BrowseModeFilter :
     Filter.Select<String>(
         "浏览来源 (Browse source)",
         arrayOf(
-            "普通搜索",
+            "站内搜索",
             "我的收藏夹",
             "我的关注标签",
             "排行榜 · 昨日",
             "排行榜 · 本月",
             "排行榜 · 本年度",
             "排行榜 · 全部时间",
-            "种子列表",
         ),
     )
 
@@ -174,9 +159,6 @@ fun ehentaiFilterList(favoriteCategoryNames: Array<String> = Array(10) { index -
     DisableLanguageFilter(),
     DisableUploaderFilter(),
     DisableTagsFilter(),
-    Filter.Header("种子列表 (Torrents)"),
-    TorrentStatusFilter(),
-    TorrentSortFilter(),
 )
 
 /**
@@ -211,8 +193,6 @@ fun buildSearchParams(
         builder.addQueryParameter("favcat", favoriteCategory.toString())
     } else if (browseMode == 2 && watchedTerms == null) {
         builder.addPathSegment("watched")
-    } else if (browseMode == 7) {
-        builder.addPathSegment("torrents.php")
     }
     var search = query.trim()
 
@@ -245,62 +225,52 @@ fun buildSearchParams(
                     search = listOf(search, favoriteKeyword).filter { it.isNotBlank() }.joinToString(" ")
                 }
             }
-            is CategoryFilter -> if (browseMode != 7) {
+            is CategoryFilter -> {
                 val bit = CATEGORY_BITS.getOrElse(filter.state) { 0 }
                 if (bit != 0) {
                     builder.addQueryParameter("f_cats", (CAT_ALL xor bit).toString())
                 }
             }
-            is RatingFilter -> if (browseMode != 7) {
+            is RatingFilter -> {
                 val rating = RATING_VALUES.getOrElse(filter.state) { 0 }
                 if (rating > 0) {
                     builder.addQueryParameter("f_srdd", rating.toString())
                 }
             }
-            is LanguageFilter -> if (browseMode != 7) {
+            is LanguageFilter -> {
                 val keyword = LANGUAGE_KEYWORDS.getOrElse(filter.state) { null }
                 if (keyword != null) {
                     search = listOf(search, keyword).filter { it.isNotBlank() }.joinToString(" ")
                 }
             }
-            is PagesFromFilter -> if (browseMode != 7) {
+            is PagesFromFilter -> {
                 val from = filter.state.trim()
                 if (from.isNotBlank()) {
                     builder.addQueryParameter("f_spf", from)
                 }
             }
-            is PagesToFilter -> if (browseMode != 7) {
+            is PagesToFilter -> {
                 val to = filter.state.trim()
                 if (to.isNotBlank()) {
                     builder.addQueryParameter("f_spt", to)
                 }
             }
-            is ExpungedFilter -> if (browseMode != 7) {
+            is ExpungedFilter -> {
                 if (filter.state) {
                     builder.addQueryParameter("f_sh", "on")
                 }
             }
-            is TorrentFilter -> if (browseMode != 7) {
+            is TorrentFilter -> {
                 if (filter.state) {
                     builder.addQueryParameter("f_sto", "on")
                 }
             }
-            is DisableLanguageFilter -> if (browseMode != 7 && filter.state) builder.addQueryParameter("f_sfl", "on")
-            is DisableUploaderFilter -> if (browseMode != 7 && filter.state) builder.addQueryParameter("f_sfu", "on")
-            is DisableTagsFilter -> if (browseMode != 7 && filter.state) builder.addQueryParameter("f_sft", "on")
-            is SeekDateFilter -> if (browseMode != 7) {
+            is DisableLanguageFilter -> if (filter.state) builder.addQueryParameter("f_sfl", "on")
+            is DisableUploaderFilter -> if (filter.state) builder.addQueryParameter("f_sfu", "on")
+            is DisableTagsFilter -> if (filter.state) builder.addQueryParameter("f_sft", "on")
+            is SeekDateFilter -> {
                 filter.state.trim().takeIf { it.matches(Regex("\\d{4}-\\d{2}-\\d{2}")) }
                     ?.let { builder.addQueryParameter("seek", it) }
-            }
-            is TorrentStatusFilter -> if (browseMode == 7) {
-                when (filter.state) {
-                    1 -> builder.addQueryParameter("s", "seeded")
-                    2 -> builder.addQueryParameter("s", "unseeded")
-                }
-            }
-            is TorrentSortFilter -> if (browseMode == 7) {
-                val order = arrayOf("", "bd", "sd", "dd", "cd").getOrElse(filter.state) { "" }
-                if (order.isNotEmpty()) builder.addQueryParameter("o", order)
             }
             else -> {}
         }
@@ -325,9 +295,7 @@ fun buildSearchParams(
             .filter { it.isNotBlank() }
             .joinToString(" ")
     }
-    if (search.isNotBlank()) {
-        builder.addQueryParameter(if (browseMode == 7) "search" else "f_search", search)
-    }
+    if (search.isNotBlank()) builder.addQueryParameter("f_search", search)
     return builder
 }
 
@@ -351,8 +319,6 @@ fun FilterList.hasNoActiveFilters(): Boolean = all { filter ->
         is ExpungedFilter -> !filter.state
         is TorrentFilter -> !filter.state
         is DisableLanguageFilter, is DisableUploaderFilter, is DisableTagsFilter -> !filter.state
-        is TorrentStatusFilter -> browseMode != 7 || filter.state == 0
-        is TorrentSortFilter -> browseMode != 7 || filter.state == 0
         else -> true
     }
 }

@@ -48,27 +48,6 @@ fun parseMangaList(doc: Document, factory: () -> SManga = { SManga.create() }): 
         parseMangaRow(link, row, factory())
     }
 
-/**
- * Parses the standalone torrent table. Torrent rows do not include a cover
- * or the compact `.glink` markup, but each row links back to its gallery.
- * Details and the full cover are fetched normally when the user opens it.
- */
-fun parseTorrentMangaList(doc: Document, factory: () -> SManga = { SManga.create() }): List<SManga> = doc
-    .select("table.itg tr")
-    .mapNotNull { row ->
-        val galleryLink = row.selectFirst("a[href*='/g/']") ?: return@mapNotNull null
-        val url = galleryLink.absUrl("href").takeIf { it.isNotBlank() } ?: return@mapNotNull null
-        val title = row.selectFirst("a[href*='gallerytorrents.php']")?.text()?.trim()
-            ?.takeIf { it.isNotEmpty() }
-            ?: galleryLink.text().trim().takeIf { it.isNotEmpty() }
-            ?: return@mapNotNull null
-        factory().apply {
-            this.url = url
-            this.title = title
-        }
-    }
-    .distinctBy { it.url }
-
 private fun parseMangaRow(link: Element, row: Element, manga: SManga): SManga? {
     val title = link.selectFirst(".glink")?.text() ?: return null
 
@@ -205,8 +184,8 @@ fun parseNextUrl(html: String, currentUrl: String? = null): String? = NEXT_URL_R
 private fun parseNumberedNextUrl(html: String, currentUrl: String): String? {
     val parsed = currentUrl.toHttpUrlOrNull() ?: return null
     val path = parsed.pathSegments.lastOrNull() ?: return null
-    if (path != "toplist.php" && path != "torrents.php") return null
-    val pageParameter = if (path == "toplist.php") "p" else "page"
+    if (path != "toplist.php") return null
+    val pageParameter = "p"
     val currentPage = parsed.queryParameter(pageParameter)?.toIntOrNull() ?: 0
     return Jsoup.parse(html, currentUrl)
         .select("table.ptt a[href], table.ptb a[href]")
