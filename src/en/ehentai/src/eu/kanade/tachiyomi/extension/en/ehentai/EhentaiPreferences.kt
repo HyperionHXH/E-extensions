@@ -8,6 +8,11 @@ import androidx.preference.SwitchPreferenceCompat
 import eu.kanade.tachiyomi.extension.en.ehentai.Constants.DEFAULT_USER_AGENT
 import eu.kanade.tachiyomi.extension.en.ehentai.Constants.DOMAIN_EHENTAI
 import eu.kanade.tachiyomi.extension.en.ehentai.Constants.DOMAIN_EXHENTAI
+import eu.kanade.tachiyomi.extension.en.ehentai.Constants.PREF_ACCOUNT_HIDDEN_TAGS
+import eu.kanade.tachiyomi.extension.en.ehentai.Constants.PREF_ACCOUNT_TAG_SET
+import eu.kanade.tachiyomi.extension.en.ehentai.Constants.PREF_ACCOUNT_TAG_SET_ENABLED
+import eu.kanade.tachiyomi.extension.en.ehentai.Constants.PREF_ACCOUNT_TAG_SYNC_AT
+import eu.kanade.tachiyomi.extension.en.ehentai.Constants.PREF_ACCOUNT_WATCHED_TAGS
 import eu.kanade.tachiyomi.extension.en.ehentai.Constants.PREF_COOKIE
 import eu.kanade.tachiyomi.extension.en.ehentai.Constants.PREF_FAVORITE_NAMES
 import eu.kanade.tachiyomi.extension.en.ehentai.Constants.PREF_IGNEOUS
@@ -87,6 +92,41 @@ class EhentaiPreferences(
     val watchedExcludeTags: List<String>
         get() = parseTagList(preferences.getString(PREF_WATCHED_EXCLUDE_TAGS, "").orEmpty())
 
+    /** Account-managed tags copied from /mytags for status and fallback diagnostics. */
+    val accountWatchedTags: List<String>
+        get() = parseTagList(preferences.getString(PREF_ACCOUNT_WATCHED_TAGS, "").orEmpty())
+
+    val accountHiddenTags: List<String>
+        get() = parseTagList(preferences.getString(PREF_ACCOUNT_HIDDEN_TAGS, "").orEmpty())
+
+    /** Whether the currently selected E-Hentai tag set is enabled. */
+    val accountTagSetEnabled: Boolean
+        get() = preferences.getBoolean(PREF_ACCOUNT_TAG_SET_ENABLED, true)
+
+    val accountTagSetNumber: Int
+        get() = runCatching {
+            preferences.getString(PREF_ACCOUNT_TAG_SET, null)
+        }.getOrNull()
+            ?.toIntOrNull()
+            ?.takeIf { it > 0 }
+            ?: runCatching { preferences.getInt(PREF_ACCOUNT_TAG_SET, 1) }.getOrDefault(1)
+
+    val accountTagSyncAt: Long
+        get() = preferences.getLong(PREF_ACCOUNT_TAG_SYNC_AT, 0L)
+
+    fun saveAccountTagSet(tagSet: AccountTagSet) {
+        val watched = tagSet.tags.filter { it.watched }.map { it.name }.distinct()
+        val hidden = tagSet.tags.filter { it.hidden }.map { it.name }.distinct()
+        preferences.edit().apply {
+            putString(PREF_ACCOUNT_WATCHED_TAGS, watched.joinToString("\n"))
+            putString(PREF_ACCOUNT_HIDDEN_TAGS, hidden.joinToString("\n"))
+            putBoolean(PREF_ACCOUNT_TAG_SET_ENABLED, tagSet.enabled)
+            putString(PREF_ACCOUNT_TAG_SET, tagSet.selectedNumber.toString())
+            putLong(PREF_ACCOUNT_TAG_SYNC_AT, System.currentTimeMillis())
+            apply()
+        }
+    }
+
     /** Favorite category labels are learned from favorites.php after login. */
     val favoriteCategoryNames: Array<String>
         get() {
@@ -141,17 +181,36 @@ class EhentaiPreferences(
         }.let { screen.addPreference(it) }
 
         EditTextPreference(context).apply {
+            key = PREF_ACCOUNT_TAG_SET
+            title = "关注标签组编号 (Watched tag set)"
+            summary = "E-Hentai /mytags 的标签组编号，默认 1。修改后下次打开我的关注标签时立即重新同步。"
+            dialogTitle = "关注标签组编号"
+            setDefaultValue("1")
+            setOnPreferenceChangeListener { _, value ->
+                val number = (value as? String)?.trim()?.toIntOrNull()
+                if (number == null || number !in 1..999) {
+                    false
+                } else {
+                    preferences.edit()
+                        .putLong(PREF_ACCOUNT_TAG_SYNC_AT, 0L)
+                        .apply()
+                    true
+                }
+            }
+        }.let { screen.addPreference(it) }
+
+        EditTextPreference(context).apply {
             key = PREF_WATCHED_INCLUDE_TAGS
-            title = "喜欢的关注标签 (Included watched tags)"
-            summary = "登录后在网站 /watched 最新流中筛选；未登录时作为兼容模式的搜索标签。多个标签用逗号分隔。"
+            title = "手动追加关注标签（兼容模式）"
+            summary = "登录后自动读取账号 /mytags；这里只用于没有登录 Cookie 时的兼容搜索。多个标签用逗号分隔。"
             dialogTitle = "未登录关注标签"
             setDefaultValue("")
         }.let { screen.addPreference(it) }
 
         EditTextPreference(context).apply {
             key = PREF_WATCHED_EXCLUDE_TAGS
-            title = "不喜欢的排除标签 (Excluded watched tags)"
-            summary = "登录后在 /watched 最新流中本地排除；账号 Hidden 标签仍由网站自动过滤。多个标签用逗号分隔。"
+            title = "手动追加排除标签（兼容模式）"
+            summary = "登录后隐藏标签由账号 /mytags 和网站 /watched 自动处理；这里只用于兼容模式。多个标签用逗号分隔。"
             dialogTitle = "本地补充排除标签"
             setDefaultValue("")
         }.let { screen.addPreference(it) }

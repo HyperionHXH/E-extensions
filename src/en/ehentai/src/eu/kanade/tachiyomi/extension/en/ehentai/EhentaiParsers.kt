@@ -16,6 +16,8 @@ import eu.kanade.tachiyomi.extension.en.ehentai.Constants.LIST_TAGS_SELECTOR
 import eu.kanade.tachiyomi.extension.en.ehentai.Constants.VIEWER_IMAGE
 import eu.kanade.tachiyomi.extension.en.ehentai.Constants.VIEWER_ORIGINAL_LINK
 import eu.kanade.tachiyomi.source.model.SManga
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.text.ParseException
@@ -35,6 +37,7 @@ import java.util.Locale
  */
 fun parseMangaList(doc: Document, factory: () -> SManga = { SManga.create() }): List<SManga> = doc
     .select(LIST_GALLERY_LINK_SELECTOR)
+    .filter { it.attr("href").contains("/g/") }
     .filter { it.selectFirst(".glink") != null }
     .mapNotNull { link ->
         val row = link.parents().firstOrNull { parent ->
@@ -44,6 +47,27 @@ fun parseMangaList(doc: Document, factory: () -> SManga = { SManga.create() }): 
         } ?: link
         parseMangaRow(link, row, factory())
     }
+
+/**
+ * Parses the standalone torrent table. Torrent rows do not include a cover
+ * or the compact `.glink` markup, but each row links back to its gallery.
+ * Details and the full cover are fetched normally when the user opens it.
+ */
+fun parseTorrentMangaList(doc: Document, factory: () -> SManga = { SManga.create() }): List<SManga> = doc
+    .select("table.itg tr")
+    .mapNotNull { row ->
+        val galleryLink = row.selectFirst("a[href*='/g/']") ?: return@mapNotNull null
+        val url = galleryLink.absUrl("href").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+        val title = row.selectFirst("a[href*='gallerytorrents.php']")?.text()?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: galleryLink.text().trim().takeIf { it.isNotEmpty() }
+            ?: return@mapNotNull null
+        factory().apply {
+            this.url = url
+            this.title = title
+        }
+    }
+    .distinctBy { it.url }
 
 private fun parseMangaRow(link: Element, row: Element, manga: SManga): SManga? {
     val title = link.selectFirst(".glink")?.text() ?: return null
@@ -90,18 +114,25 @@ class AccountTag(
 
 class AccountTagSet(
     val numbers: List<Int>,
+    val selectedNumber: Int,
+    val selectedName: String?,
     val enabled: Boolean,
     val tags: List<AccountTag>,
 )
 
 /** Parses one E-Hentai My Tags set. The same account settings apply to ExHentai. */
 fun parseAccountTagSet(doc: Document): AccountTagSet {
-    val numbers = doc.select("#tagset_outer select option[value]")
+    val options = doc.select("#tagset_outer > div > select > option[value]")
+        .ifEmpty { doc.select("#tagset_outer select option[value]") }
+    val numbers = options
         .mapNotNull { it.attr("value").toIntOrNull() }
         .filter { it > 0 }
         .distinct()
+    val selectedOption = options.firstOrNull { it.hasAttr("selected") } ?: options.firstOrNull()
+    val selectedNumber = selectedOption?.attr("value")?.toIntOrNull()?.takeIf { it > 0 } ?: 1
+    val selectedName = selectedOption?.text()?.trim()?.takeIf { it.isNotEmpty() }
 
-    val tags = doc.select("#usertags_outer > div[id^=usertag_]").mapNotNull { block ->
+    val tags = doc.select("#usertags_outer > div").mapNotNull { block ->
         val tagId = block.id().removePrefix("usertag_").toIntOrNull()?.takeIf { it > 0 } ?: return@mapNotNull null
         val name = block.selectFirst("#tagpreview_$tagId")?.attr("title")?.trim().orEmpty()
         if (name.isEmpty()) return@mapNotNull null
@@ -116,6 +147,8 @@ fun parseAccountTagSet(doc: Document): AccountTagSet {
 
     return AccountTagSet(
         numbers = numbers,
+        selectedNumber = selectedNumber,
+        selectedName = selectedName,
         enabled = doc.selectFirst("#tagset_enable[checked]") != null,
         tags = tags,
     )
@@ -148,12 +181,39 @@ fun canonicalTag(raw: String): String? {
 // Pagination (cursor based: `var nexturl="..."` / `var prevurl="..."`)
 // ---------------------------------------------------------------------------
 
-private val NEXT_URL_REGEX = Regex("""var\s+nexturl\s*=\s*"([^"]*)"""")
+private val NEXT_URL_REGEX = Regex("""var\s+nexturl\s*=\s*[\"']([^\"']*)[\"']""", RegexOption.IGNORE_CASE)
 private val NEXT_LINK_REGEX = Regex("""<a[^>]*id=[\"']dnext[\"'][^>]*href=[\"']([^\"']+)""", RegexOption.IGNORE_CASE)
 
 /** The absolute URL of the next results page, or null on the last page. */
-fun parseNextUrl(html: String): String? = NEXT_URL_REGEX.find(html)?.groupValues?.get(1)?.takeIf { it.isNotEmpty() }
+fun parseNextUrl(html: String, currentUrl: String? = null): String? = NEXT_URL_REGEX.find(html)?.groupValues?.get(1)
+    ?.replace("\\/", "/")
+    ?.replace("&amp;", "&")
+    ?.takeIf { it.isNotEmpty() }
     ?: NEXT_LINK_REGEX.find(html)?.groupValues?.get(1)?.replace("&amp;", "&")?.takeIf { it.isNotEmpty() }
+    ?: currentUrl?.let { parseNumberedNextUrl(html, it) }
+
+/**
+ * Toplists use numbered links instead of the normal `dnext` cursor. Select
+ * the first link after the current `p` value so ranklist periods can use the
+ * host's normal infinite-scroll pagination.
+ */
+private fun parseNumberedNextUrl(html: String, currentUrl: String): String? {
+    val parsed = currentUrl.toHttpUrlOrNull() ?: return null
+    val path = parsed.pathSegments.lastOrNull() ?: return null
+    if (path != "toplist.php" && path != "torrents.php") return null
+    val pageParameter = if (path == "toplist.php") "p" else "page"
+    val currentPage = parsed.queryParameter(pageParameter)?.toIntOrNull() ?: 0
+    return Jsoup.parse(html, currentUrl)
+        .select("table.ptt a[href], table.ptb a[href]")
+        .mapNotNull { link ->
+            val href = link.absUrl("href").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            val page = Regex("""[?&]$pageParameter=(\d+)""").find(href)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+            page to href
+        }
+        .filter { (page, _) -> page > currentPage }
+        .minByOrNull { (page, _) -> page }
+        ?.second
+}
 
 fun hasNextPage(html: String): Boolean = !parseNextUrl(html).isNullOrEmpty()
 
@@ -192,7 +252,9 @@ fun parseMeta(doc: Document, name: String): String? = doc.select(GALLERY_META_RO
     row.selectFirst("td.gdt1")?.text()?.trimEnd(':')?.equals(name, ignoreCase = true) == true
 }?.selectFirst("td.gdt2")?.text()?.trim()
 
-fun parseUploader(doc: Document): String? = doc.selectFirst(GALLERY_UPLOADER)?.text()
+fun parseUploader(doc: Document): String? = doc.select(GALLERY_UPLOADER)
+    .firstOrNull { it.attr("href").contains("/uploader/") }
+    ?.text()
 
 /** All tags as `namespace:tag` joined with ", " (without the namespace column headers). */
 fun parseTags(doc: Document): String? {
@@ -252,8 +314,9 @@ fun parseThumbnailPageCount(doc: Document): Int = doc.select(GALLERY_PAGE_LINKS)
     ?.plus(1)
     ?: 1
 
-/** Viewer page URLs of one thumbnail page (`#gdt a[href*=/s/]`), absolute. */
+/** Viewer page URLs of one thumbnail page, selected from the gallery grid. */
 fun parseViewerLinks(doc: Document): List<String> = doc.select(GALLERY_VIEWER_LINKS)
+    .filter { it.attr("href").contains("/s/") }
     .mapNotNull { it.absUrl("href").takeIf(String::isNotBlank) }
 
 // ---------------------------------------------------------------------------
@@ -268,7 +331,9 @@ fun parseViewerLinks(doc: Document): List<String> = doc.select(GALLERY_VIEWER_LI
  */
 fun parseImageUrl(doc: Document, wantOriginal: Boolean): String {
     if (wantOriginal) {
-        doc.selectFirst(VIEWER_ORIGINAL_LINK)?.absUrl("href")
+        doc.select(VIEWER_ORIGINAL_LINK)
+            .firstOrNull { it.attr("href").contains("/fullimg/") }
+            ?.absUrl("href")
             ?.takeIf(String::isNotBlank)
             ?.let { return it }
     }

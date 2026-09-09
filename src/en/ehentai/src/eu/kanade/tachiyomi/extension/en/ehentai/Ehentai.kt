@@ -68,7 +68,7 @@ abstract class Ehentai :
             .writeTimeout(30, TimeUnit.SECONDS)
             .addInterceptor(
                 EhentaiInterceptor(prefs, refreshClient) { viewerUrl, imageUrl ->
-                    imageUrlCache[viewerUrl] = imageUrl
+                    cacheImageUrl(viewerUrl, imageUrl)
                 },
             )
     }
@@ -128,6 +128,10 @@ abstract class Ehentai :
                 fetchSearchPage(rootUrl, page) ?: MangasPage(emptyList(), false)
             }
             2 -> getWatchedManga(page, query, appliedFilters)
+            in 3..7 -> {
+                val rootUrl = buildSearchParams(baseUrl, query, appliedFilters).build().toString()
+                fetchSearchPage(rootUrl, page) ?: MangasPage(emptyList(), false)
+            }
             else -> {
                 val rootUrl = buildSearchParams(baseUrl, query, appliedFilters).build().toString()
                 fetchSearchPage(rootUrl, page) ?: MangasPage(emptyList(), false)
@@ -137,47 +141,47 @@ abstract class Ehentai :
 
     private suspend fun getWatchedManga(page: Int, query: String, filters: FilterList): MangasPage {
         checkWatchedAccess()
-        // JHenTai's watched page is a server-owned feed. It is already ordered
-        // newest to oldest and its `next` cursor advances that same feed. Do not
-        // turn watched tags into independent searches: that loses the global
-        // ordering and brings old galleries back into the first page.
-        val hiddenTags = watchedTagFilterValues(filters, WatchedExcludeFilter::class.java, prefs.watchedExcludeTags)
+        syncAccountTagsIfNeeded()
+        // Prefer JHenTai's server-owned feed: it is already ordered newest to
+        // oldest and its `next` cursor advances that same feed. A local search
+        // fallback below is used only when that feed is unexpectedly empty.
+        val accountTagsEnabled = prefs.accountTagSetEnabled
+        val hiddenTags = watchedTagFilterValues(
+            filters,
+            WatchedExcludeFilter::class.java,
+            (if (accountTagsEnabled) prefs.accountHiddenTags else emptyList()) + prefs.watchedExcludeTags,
+        )
             .mapNotNull(::canonicalTag)
             .distinct()
 
         if (prefs.hasLoginCookie) {
-            // JHenTai keeps the watched endpoint's server ordering while still
-            // applying the active keyword/category/date constraints.
+            // JHenTai delegates watched-tag matching, hidden tags, and ordering
+            // to the site's /watched endpoint. Do not re-filter by list-row tags:
+            // those rows intentionally contain only a compact tag preview.
             val rootUrl = buildSearchParams(baseUrl, query, filters).build().toString()
-            val includedTags = watchedTagFilterValues(filters, WatchedIncludeFilter::class.java, prefs.watchedIncludeTags)
-                .mapNotNull(::canonicalTag)
-                .distinct()
-
-            // /watched is the same server-ordered feed used by JHenTai. A
-            // filtered first page can otherwise contain fewer entries than a
-            // normal source page (or be empty), so consume its next cursors
-            // until this page is full. The order is never rebuilt locally.
-            val filtered = ArrayList<SManga>(WATCHED_PAGE_SIZE)
-            val pageSeen = HashSet<String>()
-            var requestPage = page
-            var hasNextPage = true
-            while (hasNextPage && filtered.size < WATCHED_PAGE_SIZE) {
-                val result = fetchSearchPage(rootUrl, requestPage) ?: break
-                requestPage = 2
-                result.mangas.forEach { manga ->
-                    if (!pageSeen.add(manga.url)) return@forEach
-                    val tags = mangaTags(manga)
-                    if ((includedTags.isEmpty() || tags.any { it in includedTags }) &&
-                        tags.none { it in hiddenTags }
-                    ) {
-                        filtered += manga
-                    }
-                }
-                hasNextPage = result.hasNextPage
+            val result = fetchSearchPage(rootUrl, page)
+            val accountWatchedTags = prefs.accountWatchedTags.takeIf { accountTagsEnabled }.orEmpty()
+            if (result != null && (result.mangas.isNotEmpty() || accountWatchedTags.isEmpty())) {
+                return result
             }
-            return MangasPage(filtered, hasNextPage)
+
+            // E-Hentai occasionally serves an empty /watched page even though
+            // /mytags contains enabled watched tags. Fall back to the same
+            // tag-query semantics so the source remains usable while the
+            // server-side watched index catches up.
+            return getWatchedByTagSearch(page, query, filters, accountWatchedTags + prefs.watchedIncludeTags, hiddenTags)
         }
 
+        return getWatchedByTagSearch(page, query, filters, prefs.watchedIncludeTags, hiddenTags)
+    }
+
+    private suspend fun getWatchedByTagSearch(
+        page: Int,
+        query: String,
+        filters: FilterList,
+        includeTags: List<String>,
+        hiddenTags: List<String>,
+    ): MangasPage {
         val excludedTerms = hiddenTags
             .mapNotNull(::exactTagTerm)
             .distinct()
@@ -186,9 +190,11 @@ abstract class Ehentai :
         val languageIsActive = filters.filterIsInstance<LanguageFilter>().firstOrNull()?.state?.let { it > 0 } == true
         val reservedTerms = (if (query.isBlank()) 0 else 1) + (if (languageIsActive) 1 else 0)
         val chunkSize = (MAX_INCLUDED_TERMS - reservedTerms).coerceAtLeast(1)
-        val watchedTags = watchedTagFilterValues(filters, WatchedIncludeFilter::class.java, prefs.watchedIncludeTags)
+        val watchedTags = watchedTagFilterValues(filters, WatchedIncludeFilter::class.java, includeTags)
             .mapNotNull(::exactTagTerm)
             .distinct()
+
+        if (watchedTags.isEmpty()) return MangasPage(emptyList(), false)
 
         val rootUrls = watchedTags.chunked(chunkSize).map { chunk ->
             val watchedTerms = (chunk + excludedTerms).joinToString(" ")
@@ -201,6 +207,9 @@ abstract class Ehentai :
         } else {
             watchedSeenUrls.computeIfAbsent(feedKey) { ConcurrentHashMap.newKeySet() }
         }
+        if (watchedSeenUrls.size > MAX_WATCHED_FEED_ENTRIES) {
+            watchedSeenUrls.keys.firstOrNull { it != feedKey }?.let(watchedSeenUrls::remove)
+        }
         val mangas = pages
             .flatMap { it.mangas }
             .distinctBy { it.url }
@@ -211,7 +220,11 @@ abstract class Ehentai :
     }
 
     private suspend fun fetchSearchPage(rootUrl: String, page: Int): MangasPage? {
-        val url = if (page <= 1) rootUrl else nextPageCursors[rootUrl] ?: return null
+        val url = if (page <= 1) {
+            rootUrl
+        } else {
+            nextPageCursors[rootUrl] ?: directPageUrl(rootUrl, page) ?: return null
+        }
         var pageUrl = url
         var html = try {
             fetchPageHtmlWithRetry(url)
@@ -230,16 +243,45 @@ abstract class Ehentai :
                 document = Jsoup.parse(html, pageUrl)
             }
         }
-        val nextUrl = parseNextUrl(html)?.let { next ->
+        val nextUrl = parseNextUrl(html, pageUrl)?.let { next ->
             pageUrl.toHttpUrl().resolve(next)?.toString() ?: next
         }
-        if (nextUrl == null) nextPageCursors.remove(rootUrl) else nextPageCursors[rootUrl] = nextUrl
+        cacheNextPageCursor(rootUrl, nextUrl)
 
         if (url.contains("/favorites.php")) {
             prefs.saveFavoriteCategoryNames(parseFavoriteCategoryNames(document))
         }
-        val mangas = parseMangaList(document).onEach { it.url = relativeUrl(it.url) }
+        val mangas = if (pageUrl.toHttpUrlOrNull()?.pathSegments?.lastOrNull() == "torrents.php") {
+            parseTorrentMangaList(document)
+        } else {
+            parseMangaList(document)
+        }.onEach { it.url = relativeUrl(it.url) }
         return MangasPage(mangas, nextUrl != null)
+    }
+
+    private fun cacheNextPageCursor(rootUrl: String, nextUrl: String?) {
+        if (nextUrl == null) {
+            nextPageCursors.remove(rootUrl)
+            return
+        }
+        nextPageCursors[rootUrl] = nextUrl
+        if (nextPageCursors.size > MAX_PAGE_CURSOR_ENTRIES) {
+            nextPageCursors.keys.firstOrNull { it != rootUrl }?.let(nextPageCursors::remove)
+        }
+    }
+
+    /**
+     * Ranklists use stable zero-based `p` query parameters. This fallback
+     * keeps a direct page request working after an app/process restart, when
+     * the normal JavaScript cursor is not present in memory yet.
+     */
+    private fun directPageUrl(rootUrl: String, page: Int): String? {
+        val root = rootUrl.toHttpUrlOrNull() ?: return null
+        if (root.pathSegments.lastOrNull() != "toplist.php") return null
+        return root.newBuilder()
+            .setQueryParameter("p", (page - 1).toString())
+            .build()
+            .toString()
     }
 
     private fun alternateMirrorUrl(url: String): String? {
@@ -300,15 +342,20 @@ abstract class Ehentai :
             }.build().toString()
             val html = fetchPageHtmlWithRetry(url)
             val document = Jsoup.parse(html, url)
+            val links = parseViewerLinks(document)
             if (thumbnailPage == 0) {
                 val pageCount = parsePageCount(document)
                 expectedThumbnailPages = when {
-                    pageCount > 0 -> (pageCount + Constants.THUMBNAILS_PER_PAGE - 1) /
-                        Constants.THUMBNAILS_PER_PAGE
+                    pageCount > 0 -> {
+                        // E-Hentai can serve 20 or 40 thumbnails depending on
+                        // the account's display setting. Derive the page size
+                        // from the first response instead of assuming 20.
+                        val thumbnailsPerPage = links.size.takeIf { it > 0 } ?: Constants.THUMBNAILS_PER_PAGE
+                        (pageCount + thumbnailsPerPage - 1) / thumbnailsPerPage
+                    }
                     else -> parseThumbnailPageCount(document)
                 }
             }
-            val links = parseViewerLinks(document)
             val newLinks = links.filter { it !in viewerUrls }
             val expectedPages = expectedThumbnailPages
             if (expectedPages != null && thumbnailPage + 1 < expectedPages &&
@@ -338,8 +385,15 @@ abstract class Ehentai :
         imageUrlCache[viewerUrl]?.let { return it }
         val html = fetchPageHtmlWithRetry(viewerUrl)
         val document = Jsoup.parse(html, viewerUrl)
-        val wantOriginal = prefs.wantOriginal && prefs.cookie.isNotEmpty()
-        return parseImageUrl(document, wantOriginal).also { imageUrlCache[viewerUrl] = it }
+        val wantOriginal = prefs.wantOriginal && prefs.hasLoginCookie
+        return parseImageUrl(document, wantOriginal).also { cacheImageUrl(viewerUrl, it) }
+    }
+
+    private fun cacheImageUrl(viewerUrl: String, imageUrl: String) {
+        imageUrlCache[viewerUrl] = imageUrl
+        if (imageUrlCache.size > MAX_IMAGE_CACHE_ENTRIES) {
+            imageUrlCache.keys.firstOrNull()?.let(imageUrlCache::remove)
+        }
     }
 
     override fun imageRequest(page: Page): Request {
@@ -349,7 +403,7 @@ abstract class Ehentai :
             .add("Connection", "keep-alive")
             .add(EhentaiInterceptor.VIEWER_URL_HEADER, page.url)
             .build()
-        return GET(page.imageUrl!!, imageHeaders)
+        return GET(imageUrlCache[page.url] ?: page.imageUrl!!, imageHeaders)
     }
 
     override fun getHomeUrl(): String = baseUrl
@@ -378,8 +432,9 @@ abstract class Ehentai :
                 return fetchPageHtml(url)
             } catch (error: Exception) {
                 lastError = error
-                val retryable = error is IOException || error.message?.contains("HTTP 429") == true ||
-                    error.message?.contains("HTTP 5") == true
+                val message = error.message.orEmpty()
+                val retryable = error is IOException ||
+                    Regex("HTTP(?: error)? (?:429|5\\d{2})").containsMatchIn(message)
                 if (!retryable || attempt == 2) break
                 delay(350L * (attempt + 1))
             }
@@ -466,7 +521,34 @@ abstract class Ehentai :
     private fun checkWatchedAccess() {
         if (!prefs.hasLoginCookie && prefs.watchedIncludeTags.isEmpty()) {
             throw Exception(
-                "Watched tags require a login cookie so the source can read E-Hentai My Tags, or local extra watched tags.",
+                "我的关注标签需要有效的登录 Cookie。扩展会自动读取 E-Hentai /mytags，再请求服务器的 /watched 最新流。",
+            )
+        }
+    }
+
+    /**
+     * Keep a small local copy of the account tag set so login problems are
+     * diagnosable without making the watched feed depend on list-page tags.
+     * The feed itself remains authoritative for ordering and hidden-tag rules.
+     */
+    private suspend fun syncAccountTagsIfNeeded() {
+        if (!prefs.hasLoginCookie) return
+        if (System.currentTimeMillis() - prefs.accountTagSyncAt < ACCOUNT_TAG_CACHE_TTL_MS) return
+
+        val tagUrl = Constants.DEFAULT_BASE_URL.toHttpUrl().newBuilder()
+            .addPathSegment("mytags")
+            .addQueryParameter("tagset", prefs.accountTagSetNumber.toString())
+            .build()
+            .toString()
+        runCatching {
+            val document = Jsoup.parse(fetchPageHtmlWithRetry(tagUrl), tagUrl)
+            parseAccountTagSet(document)
+        }.onSuccess { tagSet ->
+            prefs.saveAccountTagSet(tagSet)
+        }.onFailure { error ->
+            throw Exception(
+                "无法读取 E-Hentai /mytags。请重新获取三个 Cookie，并确保它们来自当前 Clash 节点和同一个浏览器会话。",
+                error,
             )
         }
     }
@@ -505,13 +587,19 @@ abstract class Ehentai :
             ?.let { (it as Filter.Text).state }
             ?.trim()
             .orEmpty()
-        return if (value.isBlank()) fallback else value.split(',', '\n', '\r').map { it.trim() }.filter { it.isNotEmpty() }
+        val additional = value.split(',', '\n', '\r')
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+        return (fallback + additional).distinct()
     }
 
     companion object {
-        private const val WATCHED_PAGE_SIZE = 25
         private const val MAX_INCLUDED_TERMS = 5
         private const val MAX_EXCLUDED_TERMS = 10
+        private const val MAX_IMAGE_CACHE_ENTRIES = 512
+        private const val MAX_PAGE_CURSOR_ENTRIES = 128
+        private const val MAX_WATCHED_FEED_ENTRIES = 32
+        private const val ACCOUNT_TAG_CACHE_TTL_MS = 10 * 60 * 1000L
     }
 }
 

@@ -54,7 +54,6 @@ class EhentaiInterceptor(
                             .build()
                         continue
                     }
-                    Thread.sleep(250L * attempt)
                     continue
                 }
                 return response
@@ -70,7 +69,6 @@ class EhentaiInterceptor(
                         .build()
                     continue
                 }
-                Thread.sleep(250L * attempt)
             }
         }
     }
@@ -92,9 +90,6 @@ class EhentaiInterceptor(
             val headers = Headers.Builder()
                 .add("User-Agent", prefs.userAgent)
                 .add("Referer", "${viewerUrl.toHttpUrl().scheme}://${viewerUrl.toHttpUrl().host}/")
-                .apply {
-                    prefs.cookie.takeIf { it.isNotEmpty() }?.let { add("Cookie", it) }
-                }
                 .build()
             val viewerHtml = client.newCall(GET(viewerUrl, headers)).execute().use { response ->
                 if (!response.isSuccessful) return null
@@ -106,7 +101,9 @@ class EhentaiInterceptor(
                 // nl() reload endpoint instead of returning the same broken
                 // image URL that triggered the retry.
                 runCatching {
-                    viewerDocument.selectFirst(Constants.VIEWER_ORIGINAL_LINK)?.absUrl("href")
+                    viewerDocument.select(Constants.VIEWER_ORIGINAL_LINK)
+                        .firstOrNull { it.attr("href").contains("/fullimg/") }
+                        ?.absUrl("href")
                 }.getOrNull()?.takeIf(String::isNotBlank)?.let { return it }
             }
             val reloadKey = RELOAD_KEY_REGEX.find(viewerHtml)?.groupValues?.get(1) ?: return null
