@@ -10,7 +10,8 @@ signingkey.jks
 /*.jar
 /upstream/
 /src/*/*/
-!/src/en/ehentai/`r`n!/src/zh/komiic/
+!/src/en/ehentai/
+!/src/zh/komiic/
 !/src/pt/superhentais/
 !/src/all/pixez/
 /lib/*/
