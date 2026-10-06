@@ -1,6 +1,6 @@
 # E-extensions
 
-Personal Mihon/Suwayomi extension repository. It maintains E-Hentai, with E-Hentai and ExHentai available as mirrors of one source, and the recovered Super Hentais source.
+Personal Mihon/Suwayomi extension repository. It maintains E-Hentai/ExHentai, Komiic, and the recovered Super Hentais source.
 
 ## Mihon repository
 
@@ -16,7 +16,7 @@ Older Mihon/Suwayomi builds can use:
 https://raw.githubusercontent.com/HyperionHXH/E-extensions/repo/index.min.json
 ```
 
-The `main` branch contains only the two reviewed source modules and their required build infrastructure. The `repo` branch contains published metadata and artifacts. APKs keep the same signing key between releases so Mihon can update an installed extension. The included GitHub Actions workflow separates the signing build from the repository-writing publish job.
+The `main` branch contains the reviewed source modules and build infrastructure. The `repo` branch contains published metadata and artifacts. APKs keep the same signing key between releases so Mihon can update an installed extension. The included GitHub Actions workflow separates the signing build from the repository-writing publish job.
 
 Every push and pull request runs a tracked-file credential scan. Signing material is supplied only through GitHub Actions secrets and is never committed to either branch.
 
@@ -43,10 +43,23 @@ Enter `ipb_member_id`, `ipb_pass_hash`, and `igneous` separately in the source s
 
 No cookie value is stored in this repository or included in an APK.
 
+## Komiic 登录
+
+Komiic 的登录入口在插件设置中填写“登录邮箱”和“登录密码”。第一次读取正文图片时，插件调用 Komiic 官方 `POST /api/login`，由网站返回的 `komiic-access-token` cookie 决定账号和赞助额度；不会绕过每日图片限制。邮箱未验证、密码错误或账号额度用尽时，插件会显示对应的登录/额度错误。凭据只保存在 Mihon/Suwayomi 的本机私有设置中，不要提交到 GitHub。
+
+当前主分支版本：E-Hentai `1.6.35`、Komiic `1.6.11`、Super Hentais `1.6.1`。正式 APK/JAR 和校验清单只由 Actions 签名并发布到 `repo` 分支与 GitHub Releases。
+
 ## Build
 
 ```powershell
 C:\Temp\gradle-9.7.0\bin\gradle.bat :src:en:ehentai:assembleRelease :src:en:ehentai:assembleDebug :src:en:ehentai:lintRelease --no-daemon
 ```
 
-Artifacts are written under `src/en/ehentai/build/outputs/apk/release` and `src/en/ehentai/build/outputs/jar/release`.
+For Komiic local checks:
+
+```powershell
+$env:ANDROID_HOME = "C:\Android\sdk"
+./gradlew.bat :src:zh:komiic:assembleDebug :src:zh:komiic:lintRelease --no-daemon
+```
+
+Artifacts are written under the corresponding source's `build/outputs` directories.
