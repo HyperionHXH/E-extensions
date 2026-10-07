@@ -1,8 +1,11 @@
 package eu.kanade.tachiyomi.extension.zh.komiic
 
+import android.os.Handler
+import android.os.Looper
 import android.util.Base64
 import androidx.preference.EditTextPreference
 import androidx.preference.ListPreference
+import androidx.preference.Preference
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.network.POST
 import eu.kanade.tachiyomi.source.ConfigurableSource
@@ -28,6 +31,7 @@ import okhttp3.Request
 import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
+import kotlin.concurrent.thread
 
 @Source
 abstract class Komiic :
@@ -62,22 +66,76 @@ abstract class Komiic :
     }
 
     private val loginLock = Any()
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    private var loginStatusPreference: Preference? = null
 
     private fun ensureLogin() {
-        if (client.cookieJar.loadForRequest(baseUrl.toHttpUrl()).any { it.name == ACCESS_TOKEN }) return
+        if (client.cookieJar.loadForRequest(baseUrl.toHttpUrl()).any { it.name == ACCESS_TOKEN }) {
+            setLoginStatus("登录成功")
+            return
+        }
         val email = pref.getString(KEY_EMAIL, "").orEmpty().trim()
         val password = pref.getString(KEY_PASSWORD, "").orEmpty()
-        if (email.isEmpty() || password.isEmpty()) return
+        if (email.isEmpty() || password.isEmpty()) {
+            setLoginStatus("游客模式（未登录）")
+            return
+        }
         synchronized(loginLock) {
             if (client.cookieJar.loadForRequest(baseUrl.toHttpUrl()).any { it.name == ACCESS_TOKEN }) return
-            val body = "{\"email\":${jsonString(email)},\"password\":${jsonString(password)}}"
-                .toRequestBody("application/json".toMediaType())
-            client.newCall(Request.Builder().url("$baseUrl/api/login").headers(headers).post(body).build())
-                .execute().use { response ->
-                    if (!response.isSuccessful) {
-                        throw IOException("Komiic 登录失败：HTTP ${response.code}。请检查邮箱、密码和邮箱验证状态。")
-                    }
+            try {
+                performLogin(email, password)
+                setLoginStatus("登录成功")
+            } catch (error: IOException) {
+                setLoginStatus(loginFailureStatus(error))
+                throw error
+            }
+        }
+    }
+
+    private fun performLogin(email: String, password: String) {
+        val body = "{\"email\":${jsonString(email)},\"password\":${jsonString(password)}}"
+            .toRequestBody("application/json".toMediaType())
+        client.newCall(Request.Builder().url("$baseUrl/api/login").headers(headers).post(body).build())
+            .execute().use { response ->
+                if (!response.isSuccessful) {
+                    throw IOException("HTTP ${response.code}")
                 }
+            }
+        if (client.cookieJar.loadForRequest(baseUrl.toHttpUrl()).none { it.name == ACCESS_TOKEN }) {
+            throw IOException("未获得登录令牌")
+        }
+    }
+
+    private fun loginFailureStatus(error: IOException): String = when {
+        error.message?.startsWith("HTTP ") == true -> "登录失败：${error.message}"
+        else -> "登录失败：网络错误"
+    }
+
+    private fun setLoginStatus(status: String) {
+        pref.edit().putString(KEY_LOGIN_STATUS, status).apply()
+        loginStatusPreference?.let { preference ->
+            mainHandler.post { preference.summary = status }
+        }
+    }
+
+    private fun testLogin() {
+        setLoginStatus("正在验证登录…")
+        thread(name = "komiic-login-test") {
+            val email = pref.getString(KEY_EMAIL, "").orEmpty().trim()
+            val password = pref.getString(KEY_PASSWORD, "").orEmpty()
+            if (email.isEmpty() || password.isEmpty()) {
+                setLoginStatus("游客模式（未登录）")
+                return@thread
+            }
+            synchronized(loginLock) {
+                try {
+                    performLogin(email, password)
+                    setLoginStatus("登录成功")
+                } catch (error: IOException) {
+                    setLoginStatus(loginFailureStatus(error))
+                }
+            }
         }
     }
 
@@ -98,6 +156,19 @@ abstract class Komiic :
     private val pref by getPreferencesLazy()
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
+        Preference().apply {
+            title = "登录状态"
+            summary = pref.getString(KEY_LOGIN_STATUS, "尚未验证")
+            loginStatusPreference = this
+        }.also(screen::addPreference)
+        Preference().apply {
+            title = "测试登录"
+            summary = "点击后验证邮箱和密码是否可用"
+            setOnPreferenceClickListener {
+                testLogin()
+                true
+            }
+        }.also(screen::addPreference)
         EditTextPreference(screen.context).apply {
             key = KEY_EMAIL
             title = "登录邮箱"
@@ -125,6 +196,7 @@ abstract class Komiic :
         const val ACCESS_TOKEN = "komiic-" + "access-" + "token"
         const val KEY_EMAIL = "KOMIIC_EMAIL"
         const val KEY_PASSWORD = "KOMIIC_PASS"
+        const val KEY_LOGIN_STATUS = "KOMIIC_LOGIN_STATUS"
     }
 
     // Customize
