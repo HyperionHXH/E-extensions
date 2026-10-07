@@ -45,9 +45,11 @@ No cookie value is stored in this repository or included in an APK.
 
 ## Komiic 登录
 
-Komiic 的登录入口在插件设置中填写“登录邮箱”和“登录密码”。第一次读取正文图片时，插件调用 Komiic 官方 `POST /api/login`，由网站返回的 `komiic-access-token` cookie 决定账号和赞助额度；不会绕过每日图片限制。邮箱未验证、密码错误或账号额度用尽时，插件会显示对应的登录/额度错误。凭据只保存在 Mihon/Suwayomi 的本机私有设置中，不要提交到 GitHub。
+Komiic 的插件设置提供“登录状态”“图片额度 / 下载状态”和“验证登录状态”。邮箱和密码完整填写后自动验证，也可手动重新验证；只有官网 `account { id }` 查询确认账号会话后才显示“登录成功（官网已确认）”，旧 Cookie 或 HTTP 200 本身不会被当成登录成功。状态栏显示检查时间、图片已用额度以及登录过期、额度耗尽、网站拒绝、限流或网络失败等原因。凭据只保存在 Mihon/Suwayomi/Komikku 的本机私有设置中，不要提交到 GitHub；账号额度和权限仍由 Komiic 网站决定。
 
-当前主分支版本：E-Hentai `1.6.35`、Komiic `1.6.11`、Super Hentais `1.6.1`。正式 APK/JAR 和校验清单只由 Actions 签名并发布到 `repo` 分支与 GitHub Releases。
+本机 Suwayomi 已验证游客状态、图片额度查询和章节下载；真实账号登录和手机 Komikku 界面尚未验证。
+
+当前主分支版本：E-Hentai `1.6.36`、Komiic `1.6.13`、Super Hentais `1.6.1`。正式 APK/JAR 和校验清单只由 Actions 签名并发布到 `repo` 分支与 GitHub Releases。
 
 ## Build
 

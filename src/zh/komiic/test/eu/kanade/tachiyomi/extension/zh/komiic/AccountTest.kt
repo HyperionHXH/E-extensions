@@ -14,7 +14,9 @@ import okhttp3.Protocol
 import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
 import okio.Buffer
+import okio.ByteString.Companion.encodeUtf8
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.BeforeClass
 import org.junit.Test
@@ -106,6 +108,22 @@ class AccountTest {
     @Test
     fun invalidTokenRequiresRefresh() {
         cookies.add(Cookie.Builder().name("komiic-access-token").value("invalid").domain(url.host).build())
+        assertTrue(account.needsRefresh())
+    }
+
+    @Test
+    fun unpaddedUrlSafeTokenKeepsUnexpiredSession() {
+        val payload = """{"exp":4102444800,"fixture":"~~~???"}""".encodeUtf8().base64Url().trimEnd('=')
+        assertTrue(payload.contains('-') && payload.contains('_'))
+        cookies.add(Cookie.Builder().name("komiic-access-token").value("header.$payload.signature").domain(url.host).build())
+        assertFalse(account.needsRefresh())
+    }
+
+    @Test
+    fun tokenNearExpiryRequiresRefresh() {
+        val expiry = System.currentTimeMillis() / 1000 + 1800
+        val payload = """{"exp":$expiry}""".encodeUtf8().base64Url().trimEnd('=')
+        cookies.add(Cookie.Builder().name("komiic-access-token").value("header.$payload.signature").domain(url.host).build())
         assertTrue(account.needsRefresh())
     }
 
