@@ -4,9 +4,28 @@ plugins {
     alias(kei.plugins.extension)
 }
 
+android {
+    sourceSets.named("test") {
+        java.directories.clear()
+        kotlin.directories.clear()
+        kotlin.directories.add("test")
+    }
+}
+
+dependencies {
+    testImplementation(libs.bundles.common)
+    testImplementation(libs.tachiyomi.lib.v16)
+    testImplementation(libs.junit)
+}
+
+tasks.matching { it.name == "kspDebugUnitTestKotlin" }.configureEach {
+    // Source metadata is generated for the main variant, not for test fixtures.
+    enabled = false
+}
+
 keiyoushi {
     name = "Komiic"
-    versionCode = 12
+    versionCode = 13
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

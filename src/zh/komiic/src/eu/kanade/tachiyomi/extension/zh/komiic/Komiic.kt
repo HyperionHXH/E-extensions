@@ -2,12 +2,9 @@ package eu.kanade.tachiyomi.extension.zh.komiic
 
 import android.os.Handler
 import android.os.Looper
-import android.util.Base64
 import androidx.preference.EditTextPreference
 import androidx.preference.ListPreference
-import androidx.preference.Preference
 import androidx.preference.PreferenceScreen
-import eu.kanade.tachiyomi.network.POST
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
@@ -19,18 +16,18 @@ import keiyoushi.annotation.Source
 import keiyoushi.network.post
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.getPreferencesLazy
-import keiyoushi.utils.parseAs
 import keiyoushi.utils.parseGraphQLAs
 import kotlinx.serialization.json.JsonElement
 import okhttp3.HttpUrl
-import okhttp3.HttpUrl.Companion.toHttpUrl
-import okhttp3.Interceptor
-import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
-import okhttp3.Request
 import okhttp3.RequestBody
-import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
+import java.lang.ref.WeakReference
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
 @Source
@@ -39,6 +36,7 @@ abstract class Komiic :
     ConfigurableSource {
 
     override fun OkHttpClient.Builder.configureClient() = apply {
+        callTimeout(60, TimeUnit.SECONDS)
         addInterceptor { chain ->
             val origin = chain.request()
             val host = baseUrl.removePrefix("https://")
@@ -52,13 +50,31 @@ abstract class Komiic :
             val origin = chain.request()
             if (origin.url.toString().contains("api/image")) {
                 ensureLogin()
-                refreshToken(chain)
-                chain.proceed(origin).also {
-                    if (it.code == 402) {
-                        it.close()
-                        throw IOException("今日圖片讀取次數已達上限，請登录或明天再來！")
-                    }
+                var response = try {
+                    chain.proceed(origin)
+                } catch (error: IOException) {
+                    setStatus(KEY_IMAGE_STATUS, "图片下载失败：网络连接异常或超时")
+                    throw error
                 }
+                if (response.code == 401 && hasCredentials()) {
+                    response.close()
+                    ensureLogin(force = true)
+                    response = chain.proceed(origin)
+                }
+                if (response.code in listOf(401, 402, 403, 429)) {
+                    val reason = when (response.code) {
+                        401 -> "登录已失效，请验证登录状态"
+                        402 -> "今日图片读取额度已用尽，请等待网站额度重置"
+                        403 -> "网站拒绝图片请求（HTTP 403）"
+                        else -> "网站限流（HTTP 429），请稍后重试"
+                    }
+                    if (response.code == 401) setStatus(KEY_LOGIN_STATUS, reason)
+                    setStatus(KEY_IMAGE_STATUS, reason)
+                    response.close()
+                    throw IOException(reason)
+                }
+                if (!response.isSuccessful) setStatus(KEY_IMAGE_STATUS, "图片下载失败（HTTP ${response.code}）")
+                response
             } else {
                 chain.proceed(origin)
             }
@@ -66,113 +82,113 @@ abstract class Komiic :
     }
 
     private val loginLock = Any()
-    private val mainHandler = Handler(Looper.getMainLooper())
+    private val loginTestRunning = AtomicBoolean(false)
+    private val statusPreferences = mutableMapOf<String, WeakReference<EditTextPreference>>()
+    private val account by lazy { Account(client, { baseUrl }, { headers }) }
+    private var sessionVerified = false
+    private val pref by getPreferencesLazy()
 
-    private var loginStatusPreference: Preference? = null
+    private fun hasCredentials() = !pref.getString(KEY_EMAIL, "").isNullOrBlank() && !pref.getString(KEY_PASSWORD, "").isNullOrEmpty()
 
-    private fun ensureLogin() {
-        if (client.cookieJar.loadForRequest(baseUrl.toHttpUrl()).any { it.name == ACCESS_TOKEN }) {
-            setLoginStatus("登录成功")
-            return
-        }
+    private fun ensureLogin(force: Boolean = false) = synchronized(loginLock) {
         val email = pref.getString(KEY_EMAIL, "").orEmpty().trim()
         val password = pref.getString(KEY_PASSWORD, "").orEmpty()
-        if (email.isEmpty() || password.isEmpty()) {
-            setLoginStatus("游客模式（未登录）")
-            return
-        }
-        synchronized(loginLock) {
-            if (client.cookieJar.loadForRequest(baseUrl.toHttpUrl()).any { it.name == ACCESS_TOKEN }) return
-            try {
-                performLogin(email, password)
-                setLoginStatus("登录成功")
-            } catch (error: IOException) {
-                setLoginStatus(loginFailureStatus(error))
-                throw error
-            }
-        }
-    }
-
-    private fun performLogin(email: String, password: String) {
-        val body = "{\"email\":${jsonString(email)},\"password\":${jsonString(password)}}"
-            .toRequestBody("application/json".toMediaType())
-        client.newCall(Request.Builder().url("$baseUrl/api/login").headers(headers).post(body).build())
-            .execute().use { response ->
-                if (!response.isSuccessful) {
-                    throw IOException("HTTP ${response.code}")
+        val configured = email.isNotEmpty() && password.isNotEmpty()
+        try {
+            if (configured && (force || pref.getBoolean(KEY_ACCOUNT_CHANGED, false) || !account.hasSession())) {
+                account.login(email, password)
+                pref.edit().putBoolean(KEY_ACCOUNT_CHANGED, false).apply()
+                sessionVerified = true
+            } else if (account.hasSession()) {
+                if (account.needsRefresh()) {
+                    try {
+                        account.refresh()
+                    } catch (error: AccountException) {
+                        if (!configured) throw error
+                        account.login(email, password)
+                    }
+                    sessionVerified = true
+                } else if (!sessionVerified || force) {
+                    account.verify()
+                    sessionVerified = true
                 }
+            } else {
+                sessionVerified = false
+                setStatus(KEY_LOGIN_STATUS, if (email.isEmpty() && password.isEmpty()) "游客模式（未登录）" else "邮箱或密码未填写完整")
+                if (email.isNotEmpty() || password.isNotEmpty()) throw AccountException("邮箱或密码未填写完整")
+                return@synchronized
             }
-        if (client.cookieJar.loadForRequest(baseUrl.toHttpUrl()).none { it.name == ACCESS_TOKEN }) {
-            throw IOException("未获得登录令牌")
+            if (email != pref.getString(KEY_EMAIL, "").orEmpty().trim() || password != pref.getString(KEY_PASSWORD, "").orEmpty()) {
+                pref.edit().putBoolean(KEY_ACCOUNT_CHANGED, true).apply()
+                throw AccountException("账号已修改，请重新验证")
+            }
+            setStatus(KEY_LOGIN_STATUS, "登录成功（官网已确认）")
+        } catch (error: Exception) {
+            sessionVerified = false
+            setStatus(KEY_LOGIN_STATUS, failureStatus(error))
+            throw IOException(failureStatus(error))
         }
     }
 
-    private fun loginFailureStatus(error: IOException): String = when {
-        error.message?.startsWith("HTTP ") == true -> "登录失败：${error.message}"
-        else -> "登录失败：网络错误"
+    private fun failureStatus(error: Exception) = when (error) {
+        is AccountException -> error.message.orEmpty()
+        is IOException -> "验证失败：网络连接异常或超时"
+        else -> "验证失败：网站返回了无法识别的数据"
     }
 
-    private fun setLoginStatus(status: String) {
-        pref.edit().putString(KEY_LOGIN_STATUS, status).apply()
-        loginStatusPreference?.let { preference ->
-            mainHandler.post { preference.summary = status }
+    private fun setStatus(key: String, status: String) {
+        val timestamp = SimpleDateFormat("MM-dd HH:mm:ss", Locale.ROOT).format(Date())
+        val summary = "$status\n检查时间：$timestamp"
+        pref.edit().putString(key, summary).apply()
+        Handler(Looper.getMainLooper()).post {
+            statusPreferences[key]?.get()?.summary = summary
         }
     }
 
     private fun testLogin() {
-        setLoginStatus("正在验证登录…")
+        if (!loginTestRunning.compareAndSet(false, true)) return
+        setStatus(KEY_LOGIN_STATUS, "正在验证...")
         thread(name = "komiic-login-test") {
-            val email = pref.getString(KEY_EMAIL, "").orEmpty().trim()
-            val password = pref.getString(KEY_PASSWORD, "").orEmpty()
-            if (email.isEmpty() || password.isEmpty()) {
-                setLoginStatus("游客模式（未登录）")
-                return@thread
-            }
-            synchronized(loginLock) {
+            try {
+                ensureLogin(force = true)
                 try {
-                    performLogin(email, password)
-                    setLoginStatus("登录成功")
-                } catch (error: IOException) {
-                    setLoginStatus(loginFailureStatus(error))
+                    setStatus(KEY_IMAGE_STATUS, account.imageLimit().summary())
+                } catch (error: Exception) {
+                    setStatus(KEY_IMAGE_STATUS, failureStatus(error))
                 }
+            } catch (_: IOException) {
+                setStatus(KEY_IMAGE_STATUS, "登录验证未通过，额度尚未查询")
+            } finally {
+                loginTestRunning.set(false)
             }
         }
     }
-
-    private fun jsonString(value: String) = "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
-
-    private fun refreshToken(chain: Interceptor.Chain) {
-        client.cookieJar.loadForRequest(chain.request().url).find { it.name == ACCESS_TOKEN }?.let {
-            val parts = it.value.split('.')
-            if (parts.size < 2) throw IOException("Komiic 登录令牌格式无效，请重新填写账号密码")
-            val payload = Base64.decode(parts[1], Base64.URL_SAFE or Base64.NO_WRAP or Base64.DEFAULT).decodeToString()
-            if (System.currentTimeMillis() + 3600_000 >= payload.parseAs<JwtPayload>().exp * 1000) {
-                val response = chain.proceed(POST("$baseUrl/auth/refresh", headers)).apply { close() }
-                if (!response.isSuccessful) throw IOException("刷新 Token 失敗：HTTP ${response.code}")
-            }
-        }
-    }
-
-    private val pref by getPreferencesLazy()
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
-        Preference().apply {
-            title = "登录状态"
-            summary = pref.getString(KEY_LOGIN_STATUS, "尚未验证")
-            loginStatusPreference = this
-        }.also(screen::addPreference)
-        Preference().apply {
-            title = "测试登录"
-            summary = "点击后验证邮箱和密码是否可用"
-            setOnPreferenceClickListener {
+        listOf(KEY_LOGIN_STATUS to "登录状态", KEY_IMAGE_STATUS to "图片额度 / 下载状态").forEach { (statusKey, statusTitle) ->
+            EditTextPreference(screen.context).apply {
+                key = statusKey
+                title = statusTitle
+                summary = pref.getString(statusKey, "尚未验证")
+                setEnabled(false)
+                statusPreferences[statusKey] = WeakReference(this)
+            }.also(screen::addPreference)
+        }
+        ListPreference(screen.context).apply {
+            key = KEY_LOGIN_ACTION
+            title = "验证登录状态"
+            entries = arrayOf("验证登录并查询图片额度")
+            entryValues = arrayOf("verify")
+            setOnPreferenceChangeListener { _, _ ->
                 testLogin()
-                true
+                false
             }
         }.also(screen::addPreference)
         EditTextPreference(screen.context).apply {
             key = KEY_EMAIL
             title = "登录邮箱"
             dialogTitle = "Komiic 登录邮箱（留空为游客）"
+            setOnPreferenceChangeListener { _, value -> credentialsChanged(KEY_EMAIL, value.toString()) }
         }.also(screen::addPreference)
         EditTextPreference(screen.context).apply {
             key = KEY_PASSWORD
@@ -180,6 +196,7 @@ abstract class Komiic :
             dialogTitle = "Komiic 登录密码"
             summary = "登录后按网站账号的赞助额度读取图片；留空为游客额度"
             setOnBindEditTextListener { it.inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD }
+            setOnPreferenceChangeListener { _, value -> credentialsChanged(KEY_PASSWORD, value.toString()) }
         }.also(screen::addPreference)
         ListPreference(screen.context).apply {
             key = "CHAPTER_FILTER"
@@ -191,12 +208,21 @@ abstract class Komiic :
         }.also(screen::addPreference)
     }
 
+    private fun credentialsChanged(key: String, value: String): Boolean {
+        pref.edit().putString(key, value).putBoolean(KEY_ACCOUNT_CHANGED, true).apply()
+        setStatus(KEY_LOGIN_STATUS, "账号已修改，尚未验证")
+        setStatus(KEY_IMAGE_STATUS, "尚未查询")
+        if (hasCredentials()) testLogin()
+        return true
+    }
+
     private companion object {
-        // Keep these preference names stable while avoiding credential-like literals in source scans.
-        const val ACCESS_TOKEN = "komiic-" + "access-" + "token"
         const val KEY_EMAIL = "KOMIIC_EMAIL"
         const val KEY_PASSWORD = "KOMIIC_PASS"
         const val KEY_LOGIN_STATUS = "KOMIIC_LOGIN_STATUS"
+        const val KEY_IMAGE_STATUS = "KOMIIC_IMAGE_STATUS"
+        const val KEY_LOGIN_ACTION = "KOMIIC_LOGIN_ACTION"
+        const val KEY_ACCOUNT_CHANGED = "KOMIIC_ACCOUNT_CHANGED"
     }
 
     // Customize
