@@ -36,13 +36,13 @@
         "name": "Komiic",
         "packageName": "eu.kanade.tachiyomi.extension.zh.komiic",
         "resources": {
-          "apkUrl": "https://github.com/HyperionHXH/E-extensions/releases/download/komiic-v1.6.12/tachiyomi-zh.komiic-v1.6.12.apk",
+          "apkUrl": "https://github.com/HyperionHXH/E-extensions/releases/download/komiic-v1.6.13/tachiyomi-zh.komiic-v1.6.13.apk",
           "iconUrl": "https://raw.githubusercontent.com/HyperionHXH/E-extensions/main/src/zh/komiic/res/mipmap-xhdpi/ic_launcher.png",
-          "jarUrl": "https://github.com/HyperionHXH/E-extensions/releases/download/komiic-v1.6.12/tachiyomi-zh.komiic-v1.6.12.jar"
+          "jarUrl": "https://github.com/HyperionHXH/E-extensions/releases/download/komiic-v1.6.13/tachiyomi-zh.komiic-v1.6.13.jar"
         },
         "extensionLib": "1.6",
-        "versionCode": "12",
-        "versionName": "1.6.12",
+        "versionCode": "13",
+        "versionName": "1.6.13",
         "contentWarning": "CONTENT_WARNING_MIXED",
         "sources": [
           {
