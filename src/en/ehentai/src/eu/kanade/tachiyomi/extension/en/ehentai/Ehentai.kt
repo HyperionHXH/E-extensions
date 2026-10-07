@@ -31,7 +31,6 @@ import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Request
 import org.jsoup.Jsoup
-import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.URI
@@ -430,20 +429,19 @@ abstract class Ehentai :
 
     private suspend fun fetchPageHtmlWithRetry(url: String): String {
         var lastError: Exception? = null
-        for (attempt in 0 until 3) {
+        var retryNumber = 0
+        while (true) {
             try {
                 return fetchPageHtml(url)
             } catch (error: Exception) {
                 lastError = error
-                val message = error.message.orEmpty()
-                val retryable = error is IOException ||
-                    Regex("HTTP(?: error)? (?:429|5\\d{2})").containsMatchIn(message)
-                if (!retryable || attempt == 2) break
-                delay(350L * (attempt + 1))
+                if (!EhentaiRetryPolicy.isRetryablePageFailure(error)) break
+                retryNumber++
+                delay(EhentaiRetryPolicy.retryDelayMs(retryNumber))
             }
         }
         throw Exception(
-            "Failed to fetch $url after 3 attempts (${lastError?.message}). Check the network, User-Agent and 登录 Cookie settings.",
+            "Failed to fetch $url after ${retryNumber + 1} attempts (${lastError.message}). Check the network, User-Agent and 登录 Cookie settings.",
             lastError,
         )
     }

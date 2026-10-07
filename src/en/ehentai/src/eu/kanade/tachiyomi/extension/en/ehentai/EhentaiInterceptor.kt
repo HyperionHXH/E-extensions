@@ -8,6 +8,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Response
 import org.jsoup.Jsoup
 import java.io.IOException
+import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLHandshakeException
 
 /**
@@ -26,7 +27,6 @@ class EhentaiInterceptor(
     companion object {
         /** Internal request context used to refresh a failed H@H image URL. */
         const val VIEWER_URL_HEADER = "X-Ehentai-Viewer-Url"
-        private const val MAX_IMAGE_RETRIES = 3
         private val RELOAD_KEY_REGEX = Regex("""return\s+nl\(['\"]([^'\"]+)['\"]\)""")
     }
 
@@ -39,14 +39,20 @@ class EhentaiInterceptor(
         var requestWithHeaders = builder.build()
         val retryableImageHost = isImageHost(requestWithHeaders.url.host)
         val viewerUrl = request.header(VIEWER_URL_HEADER) ?: request.header("Referer")
-        var attempt = 0
+        var retryNumber = 0
         while (true) {
             try {
                 val response = chain.proceed(requestWithHeaders)
-                if (retryableImageHost && attempt < MAX_IMAGE_RETRIES && isRetryableImageStatus(response.code)) {
+                val responseBody = if (response.code == 403) {
+                    response.peekBody(64 * 1024L).string()
+                } else {
+                    ""
+                }
+                if (retryableImageHost && EhentaiRetryPolicy.isRetryableImageResponse(response.code, responseBody)) {
                     response.close()
-                    attempt++
-                    refreshImageUrl(viewerUrl, preferOriginal = attempt == MAX_IMAGE_RETRIES)?.let { refreshedUrl ->
+                    retryNumber++
+                    waitBeforeRetry(retryNumber)
+                    refreshImageUrl(viewerUrl, preferOriginal = retryNumber % 4 == 0)?.let { refreshedUrl ->
                         viewerUrl?.let { onImageUrlRefreshed?.invoke(it, refreshedUrl) }
                         requestWithHeaders = requestWithHeaders.newBuilder()
                             .url(refreshedUrl)
@@ -58,9 +64,10 @@ class EhentaiInterceptor(
                 }
                 return response
             } catch (e: IOException) {
-                if (!retryableImageHost || attempt >= MAX_IMAGE_RETRIES) throw e
-                attempt++
-                val preferOriginal = e.isTlsHandshakeFailure() || attempt == MAX_IMAGE_RETRIES
+                if (!retryableImageHost || !EhentaiRetryPolicy.isRetryableNetworkFailure(e)) throw e
+                retryNumber++
+                waitBeforeRetry(retryNumber)
+                val preferOriginal = e.isTlsHandshakeFailure() || retryNumber % 4 == 0
                 refreshImageUrl(viewerUrl, preferOriginal)?.let { refreshedUrl ->
                     viewerUrl?.let { onImageUrlRefreshed?.invoke(it, refreshedUrl) }
                     requestWithHeaders = requestWithHeaders.newBuilder()
@@ -73,7 +80,14 @@ class EhentaiInterceptor(
         }
     }
 
-    private fun isRetryableImageStatus(code: Int): Boolean = code == 403 || code == 404 || code == 429 || code >= 500
+    private fun waitBeforeRetry(retryNumber: Int) {
+        try {
+            TimeUnit.MILLISECONDS.sleep(EhentaiRetryPolicy.retryDelayMs(retryNumber))
+        } catch (error: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw IOException("Retry interrupted", error)
+        }
+    }
 
     private fun isImageHost(host: String): Boolean = host == "hath.network" || host.endsWith(".hath.network") ||
         host == "ehgt.org" || host.endsWith(".ehgt.org")
